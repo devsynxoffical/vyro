@@ -17,28 +17,37 @@ export interface ProductCategory {
   description: string;
 }
 
-export const NECKLACE: Product = {
-  id: 'necklace-1',
-  name: 'Pear Amethyst Necklace',
-  shortName: 'Pear Amethyst',
-  type: 'necklace',
-  image: '/products/necklace.png',
-  price: '$189',
-  description: 'Gold chain with pear-cut amethyst and diamond accents',
-};
-
 export const NECKLACE_VARIANTS: Product[] = [
-  NECKLACE,
+  {
+    id: 'necklace-1',
+    name: 'Diamond Solitaire Necklace',
+    shortName: 'Diamond Solitaire',
+    type: 'necklace',
+    image: '/products/necklace-diamond.webp',
+    price: '$389',
+    description: '18k gold chain with a round brilliant diamond solitaire pendant',
+  },
   {
     id: 'necklace-2',
-    name: 'Cascading Diamond Necklace',
-    shortName: 'Cascading Diamond',
+    name: 'Classic Pearl Strand',
+    shortName: 'Pearl Strand',
     type: 'necklace',
-    image: '/products/necklace1.png',
+    image: '/products/necklace-pearl.webp',
+    price: '$299',
+    description: 'Single strand of 7-8mm white Akoya pearls',
+  },
+  {
+    id: 'necklace-3',
+    name: 'Emerald Halo Necklace',
+    shortName: 'Emerald Halo',
+    type: 'necklace',
+    image: '/products/necklace-emerald.webp',
     price: '$459',
-    description: 'Brilliant-cut cascading diamond fringe necklace',
+    description: 'White gold chain with a pear-cut emerald in a diamond halo',
   },
 ];
+
+export const NECKLACE: Product = NECKLACE_VARIANTS[0];
 
 export const RING_VARIANTS: Product[] = [
   {
@@ -144,7 +153,7 @@ export const PRODUCT_CATEGORIES: ProductCategory[] = [
 export const PRODUCTS: Product[] = [
   ...GLASSES_VARIANTS,
   ...WATCH_VARIANTS,
-  NECKLACE,
+  ...NECKLACE_VARIANTS,
   ...RING_VARIANTS,
 ];
 

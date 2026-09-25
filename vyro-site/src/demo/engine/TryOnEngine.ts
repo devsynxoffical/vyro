@@ -1,17 +1,24 @@
 import {
   FaceLandmarker,
   HandLandmarker,
+  PoseLandmarker,
   FilesetResolver,
+  type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
 import { PRODUCTS, type Product } from '../types';
 import { estimateFingerSize } from './fingerSizing';
-import { NECKLACE_ASSET, computeNecklacePlacement } from './necklacePlacement';
 import { SmoothAngle, SmoothPoint, SmoothValue } from './smoothing';
 import {
+  DEFAULT_ALPHA_BOUNDS,
   DEFAULT_WATCH_GEOMETRY,
+  measureAlphaBounds,
   measureWatchGeometry,
+  type AlphaBounds,
   type WatchGeometry,
 } from './watchGeometry';
+
+type Vision = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
+type Pt = { x: number; y: number };
 
 const WASM_CDN =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
@@ -21,6 +28,22 @@ const HAND_MODEL =
 
 const FACE_MODEL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+const POSE_MODEL =
+  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+
+// Pose landmark indices
+const POSE = {
+  leftShoulder: 11,
+  rightShoulder: 12,
+  leftElbow: 13,
+  rightElbow: 14,
+  leftWrist: 15,
+  rightWrist: 16,
+} as const;
+const POSE_MIN_VISIBILITY = 0.5;
+/** Elbows at the frame edge get hallucinated positions; demand more of them. */
+const POSE_ELBOW_MIN_VISIBILITY = 0.65;
 
 export type EngineStatus = 'idle' | 'loading' | 'ready' | 'error';
 export type CameraFacing = 'user' | 'environment';
@@ -65,9 +88,23 @@ const DEFAULT_GLASSES_TUNING = { widthFactor: 1.0, anchorX: 0.5, anchorY: 0.405 
 const WATCH_TUNING = {
   wristTaper: 0.73,
   /** Case (incl. lugs) width relative to the visible wrist breadth */
-  caseToWrist: 0.7,
-  /** How far below the wrist joint the case sits, relative to wrist breadth */
-  forearmOffset: 0.3,
+  caseToWrist: 0.78,
+  /**
+   * How far below the wrist joint the case sits, relative to wrist breadth.
+   * The wrist landmark already lands slightly down the forearm on a fist, so
+   * the case goes right on it.
+   */
+  forearmOffset: 0,
+};
+
+const NECKLACE_TUNING = {
+  /** Chain spread at the neck relative to the shoulder span (pose) */
+  chainToShoulders: 0.32,
+  /** Neck base sits this far above the shoulder midpoint, relative to span */
+  neckLift: 0.11,
+  /** Fallbacks when only the face is tracked, relative to jaw width */
+  chainToJaw: 1.25,
+  neckDropFromChin: 0.55,
 };
 
 export class TryOnEngine {
@@ -77,8 +114,11 @@ export class TryOnEngine {
   private overlayCanvas: HTMLCanvasElement | null = null;
   private overlayCtx: CanvasRenderingContext2D | null = null;
 
+  private vision: Vision | null = null;
   private handLandmarker: HandLandmarker | null = null;
   private faceLandmarker: FaceLandmarker | null = null;
+  private poseLandmarker: PoseLandmarker | null = null;
+  private poseLoading: Promise<void> | null = null;
 
   private ringAsset: LoadedImage | null = null;
   private necklaceAsset: LoadedImage | null = null;
@@ -86,6 +126,8 @@ export class TryOnEngine {
   private watchAsset: LoadedImage | null = null;
   private watchGeometry: WatchGeometry = DEFAULT_WATCH_GEOMETRY;
   private watchGeometryCache = new Map<string, WatchGeometry>();
+  private necklaceBounds: AlphaBounds = DEFAULT_ALPHA_BOUNDS;
+  private necklaceBoundsCache = new Map<string, AlphaBounds>();
   private imageCache = new Map<string, LoadedImage>();
 
   private animationId = 0;
@@ -110,13 +152,7 @@ export class TryOnEngine {
   private watchCenter = new SmoothPoint(0.16);
   private watchScale = new SmoothValue(0.18);
   private watchRotation = new SmoothAngle(0.14);
-  private watchArmDir = new SmoothPoint(0.12);
-
-  private wristTrail: { x: number; y: number }[] = [];
-  private lockedArmDir: { x: number; y: number } | null = null;
-  private armLockStrength = 0;
-  private armStableFrames = 0;
-  private lastWatchAngle = 0;
+  private watchArmDir = new SmoothPoint(0.2);
 
   private lastFrameTime = 0;
   private frameCount = 0;
@@ -271,8 +307,43 @@ export class TryOnEngine {
     }
   }
 
+  /**
+   * Body pose (shoulders, elbows, wrists) is only needed for watches and
+   * necklaces, so it loads on first use; those products fall back to hand /
+   * face-only placement until it is ready.
+   */
+  private ensurePose(): Promise<void> {
+    if (this.poseLandmarker || this.destroyed) return Promise.resolve();
+    if (this.poseLoading) return this.poseLoading;
+    this.poseLoading = (async () => {
+      const vision = this.vision ?? (await FilesetResolver.forVisionTasks(WASM_CDN));
+      const load = (delegate: 'GPU' | 'CPU') =>
+        PoseLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: POSE_MODEL, delegate },
+          runningMode: 'VIDEO',
+          numPoses: 1,
+        });
+      let pose: PoseLandmarker;
+      try {
+        pose = await load('GPU');
+      } catch {
+        pose = await load('CPU');
+      }
+      if (this.destroyed) {
+        pose.close();
+        return;
+      }
+      this.poseLandmarker = pose;
+    })().catch(() => {
+      // Pose is an enhancement; keep running on hand / face tracking alone.
+      this.poseLoading = null;
+    });
+    return this.poseLoading;
+  }
+
   private async initMediaPipe() {
     const vision = await FilesetResolver.forVisionTasks(WASM_CDN);
+    this.vision = vision;
 
     const loadFace = (delegate: 'GPU' | 'CPU') =>
       FaceLandmarker.createFromOptions(vision, {
@@ -306,6 +377,16 @@ export class TryOnEngine {
       this.faceLandmarker = null;
       this.handLandmarker = null;
     }
+  }
+
+  private detectPose(ts: number): NormalizedLandmark[] | null {
+    if (!this.poseLandmarker || !this.video) return null;
+    const res = this.poseLandmarker.detectForVideo(this.video, ts);
+    return res.landmarks[0] ?? null;
+  }
+
+  private visible(lm: NormalizedLandmark | undefined): lm is NormalizedLandmark {
+    return !!lm && (lm.visibility ?? 1) >= POSE_MIN_VISIBILITY;
   }
 
   async getImage(url: string): Promise<LoadedImage> {
@@ -347,19 +428,7 @@ export class TryOnEngine {
   }
 
   private resetWatchArmState() {
-    this.wristTrail = [];
-    this.lockedArmDir = null;
-    this.armLockStrength = 0;
-    this.armStableFrames = 0;
-    this.lastWatchAngle = 0;
     this.watchArmDir.reset();
-  }
-
-  private clampAngleStep(angle: number, prevAngle: number, maxStep: number): number {
-    let diff = angle - prevAngle;
-    while (diff > Math.PI) diff -= 2 * Math.PI;
-    while (diff < -Math.PI) diff += 2 * Math.PI;
-    return Math.abs(diff) <= maxStep ? angle : prevAngle + Math.sign(diff) * maxStep;
   }
 
   async setProduct(product: Product) {
@@ -371,10 +440,20 @@ export class TryOnEngine {
     const loaded = await this.getImage(product.image);
     // A newer selection arrived while this image was loading.
     if (this.activeProduct !== product) return;
+    if (product.type === 'watch' || product.type === 'necklace') {
+      void this.ensurePose();
+    }
     switch (product.type) {
-      case 'necklace':
+      case 'necklace': {
+        let bounds = this.necklaceBoundsCache.get(product.image);
+        if (!bounds) {
+          bounds = measureAlphaBounds(loaded.image);
+          this.necklaceBoundsCache.set(product.image, bounds);
+        }
+        this.necklaceBounds = bounds;
         this.necklaceAsset = loaded;
         break;
+      }
       case 'glasses':
         this.glassesAsset = loaded;
         break;
@@ -452,48 +531,58 @@ export class TryOnEngine {
     const ts = this.nextTimestamp();
     let tracking = false;
 
-    if (
-      (product.type === 'necklace' || product.type === 'glasses') &&
-      this.faceLandmarker
-    ) {
-      const res = this.faceLandmarker.detectForVideo(this.video, ts);
-      if (res.faceLandmarks.length > 0) {
-        tracking = true;
-        if (!this.lastTracking) {
-          this.neckCenter.reset();
-          this.neckScale.reset();
-          this.neckRotation.reset();
-          this.glassesCenter.reset();
-          this.glassesScale.reset();
-          this.glassesRotation.reset();
+    switch (product.type) {
+      case 'glasses': {
+        if (!this.faceLandmarker) break;
+        const res = this.faceLandmarker.detectForVideo(this.video, ts);
+        if (res.faceLandmarks.length > 0) {
+          tracking = true;
+          if (!this.lastTracking) {
+            this.glassesCenter.reset();
+            this.glassesScale.reset();
+            this.glassesRotation.reset();
+          }
+          if (this.glassesAsset) this.drawGlasses(res, vw, vh);
         }
-        if (product.type === 'necklace' && this.necklaceAsset) {
-          this.drawNecklace(res, vw, vh);
-        } else if (product.type === 'glasses' && this.glassesAsset) {
-          this.drawGlasses(res, vw, vh);
-        }
+        break;
       }
-    } else if (
-      (product.type === 'ring' || product.type === 'watch') &&
-      this.handLandmarker
-    ) {
-      const res = this.handLandmarker.detectForVideo(this.video, ts);
-      if (res.landmarks.length > 0) {
-        tracking = true;
-        if (!this.lastTracking) {
-          this.ringCenter.reset();
-          this.ringScale.reset();
-          this.ringRotation.reset();
-          this.watchCenter.reset();
-          this.watchScale.reset();
-          this.watchRotation.reset();
-          this.resetWatchArmState();
+      case 'necklace': {
+        const pose = this.detectPose(ts);
+        const face = this.faceLandmarker?.detectForVideo(this.video, ts);
+        const target = this.necklaceTarget(pose, face?.faceLandmarks[0], vw, vh);
+        if (target) {
+          tracking = true;
+          if (!this.lastTracking) {
+            this.neckCenter.reset();
+            this.neckScale.reset();
+            this.neckRotation.reset();
+          }
+          if (this.necklaceAsset) this.drawNecklace(target);
         }
-        if (product.type === 'ring' && this.ringAsset) {
-          this.drawRing(res, vw, vh);
-        } else if (product.type === 'watch' && this.watchAsset) {
-          this.drawWatch(res, vw, vh);
+        break;
+      }
+      case 'ring':
+      case 'watch': {
+        if (!this.handLandmarker) break;
+        const res = this.handLandmarker.detectForVideo(this.video, ts);
+        if (res.landmarks.length > 0) {
+          tracking = true;
+          if (!this.lastTracking) {
+            this.ringCenter.reset();
+            this.ringScale.reset();
+            this.ringRotation.reset();
+            this.watchCenter.reset();
+            this.watchScale.reset();
+            this.watchRotation.reset();
+            this.resetWatchArmState();
+          }
+          if (product.type === 'ring' && this.ringAsset) {
+            this.drawRing(res, vw, vh);
+          } else if (product.type === 'watch' && this.watchAsset) {
+            this.drawWatch(res, this.detectPose(ts), vw, vh);
+          }
         }
+        break;
       }
     }
 
@@ -537,67 +626,81 @@ export class TryOnEngine {
     this.overlayCtx.restore();
   }
 
-  private drawNecklace(
-    result: ReturnType<FaceLandmarker['detectForVideo']>,
+  /**
+   * Where the necklace hangs: the neck base (top-centre of the chain), the
+   * chain spread there, and the shoulder tilt. Pose shoulders give the real
+   * chest position; the face alone is a rougher fallback.
+   */
+  private necklaceTarget(
+    pose: NormalizedLandmark[] | null,
+    face: NormalizedLandmark[] | undefined,
     w: number,
     h: number,
-  ) {
-    if (!this.necklaceAsset || !this.activeProduct) return;
+  ): { center: Pt; width: number; angle: number } | null {
+    const ls = pose?.[POSE.leftShoulder];
+    const rs = pose?.[POSE.rightShoulder];
+    if (this.visible(ls) && this.visible(rs)) {
+      const a = this.toScreen(ls.x, ls.y, w, h);
+      const b = this.toScreen(rs.x, rs.y, w, h);
+      // Order by screen x so the angle is near 0 whether or not we mirror.
+      const [l, r] = a.x <= b.x ? [a, b] : [b, a];
+      const span = Math.hypot(r.x - l.x, r.y - l.y);
+      if (span > w * 0.05) {
+        const angle = Math.atan2(r.y - l.y, r.x - l.x);
+        // "Up" relative to the shoulder line, so the neck base follows a tilt.
+        const upX = Math.sin(angle);
+        const upY = -Math.cos(angle);
+        const lift = span * NECKLACE_TUNING.neckLift;
+        return {
+          center: {
+            x: (l.x + r.x) / 2 + upX * lift,
+            y: (l.y + r.y) / 2 + upY * lift,
+          },
+          width: span * NECKLACE_TUNING.chainToShoulders,
+          angle,
+        };
+      }
+    }
 
-    const lm = result.faceLandmarks[0];
-    const leftJaw = lm[172];
-    const rightJaw = lm[397];
-    const leftCheek = lm[234];
-    const rightCheek = lm[454];
-    const chin = lm[152];
+    if (face) {
+      const a = this.toScreen(face[172].x, face[172].y, w, h);
+      const b = this.toScreen(face[397].x, face[397].y, w, h);
+      const chin = this.toScreen(face[152].x, face[152].y, w, h);
+      const [l, r] = a.x <= b.x ? [a, b] : [b, a];
+      const jaw = Math.hypot(r.x - l.x, r.y - l.y);
+      const angle = Math.atan2(r.y - l.y, r.x - l.x);
+      const downX = -Math.sin(angle);
+      const downY = Math.cos(angle);
+      const drop = jaw * NECKLACE_TUNING.neckDropFromChin;
+      return {
+        center: { x: chin.x + downX * drop, y: chin.y + downY * drop },
+        width: jaw * NECKLACE_TUNING.chainToJaw,
+        angle,
+      };
+    }
 
-    const leftJawPt = this.toScreen(leftJaw.x, leftJaw.y, w, h);
-    const rightJawPt = this.toScreen(rightJaw.x, rightJaw.y, w, h);
-    const leftCheekPt = this.toScreen(leftCheek.x, leftCheek.y, w, h);
-    const rightCheekPt = this.toScreen(rightCheek.x, rightCheek.y, w, h);
-    const chinPt = this.toScreen(chin.x, chin.y, w, h);
+    return null;
+  }
 
-    const cheekWidth = Math.hypot(
-      rightCheekPt.x - leftCheekPt.x,
-      rightCheekPt.y - leftCheekPt.y,
-    );
-    const jawWidth = Math.hypot(
-      rightJawPt.x - leftJawPt.x,
-      rightJawPt.y - leftJawPt.y,
-    );
-    const centerX = (leftCheekPt.x + rightCheekPt.x) / 2;
+  private drawNecklace(target: { center: Pt; width: number; angle: number }) {
+    if (!this.necklaceAsset) return;
+    const b = this.necklaceBounds;
+    const opaqueWidth = Math.max(0.05, b.right - b.left);
+    const imageWidth = target.width / opaqueWidth;
 
-    const placement = computeNecklacePlacement(
-      {
-        chinY: chinPt.y,
-        cheekWidth,
-        jawWidth,
-        assetAspect: this.necklaceAsset.aspect,
-      },
-      centerX,
-      NECKLACE_ASSET,
-    );
+    const pos = this.neckCenter.update(target.center.x, target.center.y);
+    const width = this.neckScale.update(imageWidth);
+    const angle = this.neckRotation.update(target.angle);
 
-    const angle = Math.atan2(
-      rightJawPt.y - leftJawPt.y,
-      rightJawPt.x - leftJawPt.x,
-    );
-
-    const smoothPos = this.neckCenter.update(placement.centerX, placement.chestY);
-    const smoothScale = this.neckScale.update(placement.scale);
-    const smoothAngle = this.neckRotation.update(angle);
-
+    // Anchor at the top-centre of the chain so it hangs from the neck base.
     this.drawImageAt(
       this.necklaceAsset,
-      smoothPos.x,
-      smoothPos.y,
-      smoothScale,
-      smoothAngle,
-      0.5,
-      NECKLACE_ASSET.pendantAnchorY,
-      // Mirroring swaps the landmark sides, turning the angle by ~180°; the
-      // vertical flip undoes that. Unmirrored (back camera) needs no flip.
-      this.mirror,
+      pos.x,
+      pos.y,
+      width,
+      angle,
+      (b.left + b.right) / 2,
+      b.top,
     );
   }
 
@@ -744,84 +847,6 @@ export class TryOnEngine {
     return { x: x / len, y: y / len };
   }
 
-  private orientArmWithKnuckles(
-    armX: number,
-    armY: number,
-    indexPt: { x: number; y: number },
-    pinkyPt: { x: number; y: number },
-  ) {
-    const kx = pinkyPt.x - indexPt.x;
-    const ky = pinkyPt.y - indexPt.y;
-    const cross = armX * ky - armY * kx;
-    if (cross < 0) return { x: -armX, y: -armY };
-    return { x: armX, y: armY };
-  }
-
-  private blendArmDir(
-    current: { x: number; y: number },
-    target: { x: number; y: number },
-    alpha: number,
-  ) {
-    const bx = current.x * (1 - alpha) + target.x * alpha;
-    const by = current.y * (1 - alpha) + target.y * alpha;
-    return this.normalizeDir(bx, by);
-  }
-
-  private computeHand3DArmAxis(
-    index: { x: number; y: number; z: number },
-    pinky: { x: number; y: number; z: number },
-    middle: { x: number; y: number; z: number },
-    wrist: { x: number; y: number; z: number },
-    w: number,
-    h: number,
-  ): { x: number; y: number } | null {
-    const zScale = w * 0.9;
-    const rel = (lm: typeof wrist) => ({
-      x: this.toScreen(lm.x, lm.y, w, h).x - this.toScreen(wrist.x, wrist.y, w, h).x,
-      y: this.toScreen(lm.x, lm.y, w, h).y - this.toScreen(wrist.x, wrist.y, w, h).y,
-      z: (lm.z - wrist.z) * zScale,
-    });
-
-    const u = rel(index);
-    const f = rel(pinky);
-    const m = rel(middle);
-
-    const dx = f.x - u.x;
-    const dy = f.y - u.y;
-    const dz = f.z - u.z;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    const nx = dx / len;
-    const ny = dy / len;
-    const nz = dz / len;
-
-    const mLen = Math.hypot(m.x, m.y, m.z) || 1;
-    const mx = m.x / mLen;
-    const my = m.y / mLen;
-    const mz = m.z / mLen;
-
-    const cx = ny * mz - nz * my;
-    const cy = nz * mx - nx * mz;
-    const cz = nx * my - ny * mx;
-
-    const fx = cy * nz - cz * ny;
-    const fy = cz * nx - cx * nz;
-    const fLen = Math.hypot(fx, fy);
-    if (fLen < w * 0.018) return null;
-
-    return { x: fx / fLen, y: fy / fLen };
-  }
-
-  private computeWristTrailAxis(minSpan: number): { x: number; y: number } | null {
-    if (this.wristTrail.length < 5) return null;
-    const first = this.wristTrail[0];
-    const last = this.wristTrail[this.wristTrail.length - 1];
-    const dx = last.x - first.x;
-    const dy = last.y - first.y;
-    const span = Math.hypot(dx, dy);
-    if (span < minSpan) return null;
-    return { x: dx / span, y: dy / span };
-  }
-
   private estimateWristBreadth(
     indexPt: { x: number; y: number },
     pinkyPt: { x: number; y: number },
@@ -836,8 +861,47 @@ export class TryOnEngine {
     return Math.max(knuckleSpan, projectedSpan) * WATCH_TUNING.wristTaper;
   }
 
+  /**
+   * Forearm direction (elbow -> wrist, i.e. towards the hand) from the pose
+   * skeleton, for the pose wrist nearest the tracked hand. Null if the arm is
+   * not visible, in which case the hand-only heuristics below take over.
+   */
+  private poseArmAxis(
+    pose: NormalizedLandmark[] | null,
+    handWristPt: Pt,
+    w: number,
+    h: number,
+    maxDist: number,
+  ): Pt | null {
+    if (!pose) return null;
+    let best: Pt | null = null;
+    let bestDist = maxDist;
+    const sides: [number, number][] = [
+      [POSE.leftWrist, POSE.leftElbow],
+      [POSE.rightWrist, POSE.rightElbow],
+    ];
+    for (const [wi, ei] of sides) {
+      const wrist = pose[wi];
+      const elbow = pose[ei];
+      if (!this.visible(wrist) || !this.visible(elbow)) continue;
+      if ((elbow.visibility ?? 1) < POSE_ELBOW_MIN_VISIBILITY) continue;
+      const wp = this.toScreen(wrist.x, wrist.y, w, h);
+      const ep = this.toScreen(elbow.x, elbow.y, w, h);
+      // An elbow outside the frame is extrapolated, not seen.
+      if (ep.x < 0 || ep.x > w || ep.y < 0 || ep.y > h) continue;
+      const dist = Math.hypot(wp.x - handWristPt.x, wp.y - handWristPt.y);
+      const len = Math.hypot(wp.x - ep.x, wp.y - ep.y);
+      if (dist < bestDist && len > w * 0.03) {
+        bestDist = dist;
+        best = { x: (wp.x - ep.x) / len, y: (wp.y - ep.y) / len };
+      }
+    }
+    return best;
+  }
+
   private drawWatch(
     result: ReturnType<HandLandmarker['detectForVideo']>,
+    pose: NormalizedLandmark[] | null,
     w: number,
     h: number,
   ) {
@@ -864,115 +928,40 @@ export class TryOnEngine {
     const wristPt = this.toScreen(wrist.x, wrist.y, w, h);
     const indexPt = this.toScreen(indexMcp.x, indexMcp.y, w, h);
     const pinkyPt = this.toScreen(pinkyMcp.x, pinkyMcp.y, w, h);
+    const middlePt = this.toScreen(middleMcp.x, middleMcp.y, w, h);
     const knuckleSpan = Math.hypot(pinkyPt.x - indexPt.x, pinkyPt.y - indexPt.y);
 
-    this.wristTrail.push({ x: wristPt.x, y: wristPt.y });
-    if (this.wristTrail.length > 18) this.wristTrail.shift();
+    // Forearm direction, pointing towards the hand. The pose skeleton is best;
+    // otherwise the hand itself continues the forearm line unless the wrist is
+    // bent, so wrist -> middle knuckle is a sound fallback in any hand pose.
+    const target =
+      this.poseArmAxis(pose, wristPt, w, h, knuckleSpan * 1.5) ??
+      this.normalizeDir(middlePt.x - wristPt.x, middlePt.y - wristPt.y);
 
-    const dx = pinkyPt.x - indexPt.x;
-    const dy = pinkyPt.y - indexPt.y;
-    const knuckleDist = Math.hypot(dx, dy) || 1;
-    const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.6;
+    const smoothArm = this.watchArmDir.update(target.x, target.y);
+    const armAxis = this.normalizeDir(smoothArm.x, smoothArm.y);
 
-    const baseArm = this.orientArmWithKnuckles(
-      -dy / knuckleDist,
-      dx / knuckleDist,
-      indexPt,
-      pinkyPt,
+    const palmLen = Math.hypot(
+      (middleMcp.x - wrist.x) * w,
+      (middleMcp.y - wrist.y) * h,
+      (middleMcp.z - wrist.z) * w,
     );
-
-    let armDir: { x: number; y: number } | null = null;
-    if (!isHorizontal) {
-      armDir = baseArm;
-    } else {
-      const hand3D = this.computeHand3DArmAxis(indexMcp, pinkyMcp, middleMcp, wrist, w, h);
-      if (hand3D) {
-        if (Math.abs(hand3D.y) > Math.abs(hand3D.x) * 1.4) {
-          // strong vertical signal
-        } else {
-          armDir = this.orientArmWithKnuckles(hand3D.x, hand3D.y, indexPt, pinkyPt);
-        }
-      }
-      if (!armDir && this.armLockStrength < 0.55) {
-        const trail = this.computeWristTrailAxis(knuckleSpan * 0.45);
-        if (trail) {
-          armDir = this.orientArmWithKnuckles(trail.x, trail.y, indexPt, pinkyPt);
-        }
-      }
-    }
-
-    if (armDir && this.lockedArmDir) {
-      const dot = armDir.x * this.lockedArmDir.x + armDir.y * this.lockedArmDir.y;
-      if (dot > 0.88) {
-        this.armStableFrames++;
-      } else {
-        this.armStableFrames = 0;
-      }
-    } else if (armDir) {
-      this.armStableFrames++;
-    } else {
-      this.armStableFrames = 0;
-    }
-
-    if (!this.lockedArmDir && armDir && this.armStableFrames >= 10) {
-      this.lockedArmDir = armDir;
-      this.armLockStrength = 0.65;
-    } else if (
-      this.lockedArmDir &&
-      armDir &&
-      this.armLockStrength < 1 &&
-      armDir.x * this.lockedArmDir.x + armDir.y * this.lockedArmDir.y > 0.9
-    ) {
-      this.lockedArmDir = this.blendArmDir(this.lockedArmDir, armDir, 0.06);
-      this.armLockStrength = Math.min(1, this.armLockStrength + 0.04);
-    }
-
-    let targetDirX: number;
-    let targetDirY: number;
-    if (this.lockedArmDir && this.armLockStrength >= 0.55) {
-      targetDirX = this.lockedArmDir.x;
-      targetDirY = this.lockedArmDir.y;
-    } else if (armDir) {
-      targetDirX = armDir.x;
-      targetDirY = armDir.y;
-    } else if (this.lockedArmDir) {
-      targetDirX = this.lockedArmDir.x;
-      targetDirY = this.lockedArmDir.y;
-    } else {
-      targetDirX = baseArm.x;
-      targetDirY = baseArm.y;
-    }
-
-    // The arm estimates are only an axis; make it point from the wrist towards
-    // the fingers so 12 o'clock faces the hand and the case sits down the
-    // forearm. Orient before smoothing so opposite directions never average out.
-    const middlePt = this.toScreen(middleMcp.x, middleMcp.y, w, h);
-    const handX = middlePt.x - wristPt.x;
-    const handY = middlePt.y - wristPt.y;
-    if (targetDirX * handX + targetDirY * handY < 0) {
-      targetDirX = -targetDirX;
-      targetDirY = -targetDirY;
-    }
-
-    const smoothArm = this.watchArmDir.update(targetDirX, targetDirY);
-    let armAxis = this.normalizeDir(smoothArm.x, smoothArm.y);
-    if (armAxis.x * handX + armAxis.y * handY < 0) armAxis = { x: -armAxis.x, y: -armAxis.y };
-
-    const wristBreadth = this.estimateWristBreadth(indexPt, pinkyPt, armAxis);
+    // Knuckle span foreshortens on a fist, palm length on a flat hand facing
+    // the camera edge-on; the larger of the two is the better wrist estimate.
+    const wristBreadth = Math.max(
+      this.estimateWristBreadth(indexPt, pinkyPt, armAxis),
+      palmLen * 0.6,
+    );
     const watchWidth =
       (wristBreadth * WATCH_TUNING.caseToWrist) / this.watchGeometry.caseWidthFrac;
     const watchX = wristPt.x - armAxis.x * wristBreadth * WATCH_TUNING.forearmOffset;
     const watchY = wristPt.y - armAxis.y * wristBreadth * WATCH_TUNING.forearmOffset;
 
-    let angle = Math.atan2(armAxis.y, armAxis.x) + Math.PI / 2;
+    // 12 o'clock towards the hand.
+    const angle = Math.atan2(armAxis.y, armAxis.x) + Math.PI / 2;
     const smoothPos = this.watchCenter.update(watchX, watchY);
     const smoothScale = this.watchScale.update(watchWidth);
-
-    if (this.armLockStrength >= 0.55) {
-      angle = this.clampAngleStep(angle, this.lastWatchAngle, 0.28);
-    }
-    this.lastWatchAngle = this.watchRotation.update(angle);
-    const rotation = this.lastWatchAngle;
+    const rotation = this.watchRotation.update(angle);
 
     this.drawImageAt(
       this.watchAsset,
@@ -995,7 +984,9 @@ export class TryOnEngine {
     this.stopStream();
     this.faceLandmarker?.close();
     this.handLandmarker?.close();
+    this.poseLandmarker?.close();
     this.faceLandmarker = null;
     this.handLandmarker = null;
+    this.poseLandmarker = null;
   }
 }

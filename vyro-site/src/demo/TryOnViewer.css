@@ -323,7 +323,7 @@
   padding: 8px;
   border-radius: 14px;
   border: 2px solid rgba(255, 255, 255, 0.1);
-  background: rgba(20, 20, 28, 0.8);
+  background: linear-gradient(180deg, #2a2a36 0%, #1a1a24 100%);
   backdrop-filter: blur(10px);
   cursor: pointer;
   transition:

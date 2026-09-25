@@ -7,6 +7,7 @@ import {
 import {
   GLASSES_VARIANTS,
   PRODUCTS,
+  NECKLACE_VARIANTS,
   RING_VARIANTS,
   WATCH_VARIANTS,
   getDefaultProduct,
@@ -287,7 +288,8 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
         </div>
         {(activeProduct.type === 'ring' && RING_VARIANTS.length > 1) ||
         (activeProduct.type === 'glasses' && GLASSES_VARIANTS.length > 1) ||
-        (activeProduct.type === 'watch' && WATCH_VARIANTS.length > 1) ? (
+        (activeProduct.type === 'watch' && WATCH_VARIANTS.length > 1) ||
+        (activeProduct.type === 'necklace' && NECKLACE_VARIANTS.length > 1) ? (
           <p className="tryon-picker__meta">{activeProduct.name}</p>
         ) : null}
       </div>
