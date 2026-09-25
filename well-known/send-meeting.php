@@ -1,13 +1,5 @@
 <?php
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Headers: Content-Type');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit;
-}
-
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode(['success' => false, 'error' => 'Method not allowed']);
     exit;
@@ -21,13 +13,27 @@ if (!$data || empty($data['name']) || empty($data['email'])) {
     exit;
 }
 
-$name = htmlspecialchars($data['name'] ?? '');
-$email = filter_var($data['email'] ?? '', FILTER_SANITIZE_EMAIL);
-$phone = isset($data['phone']) && !empty($data['phone']) ? htmlspecialchars($data['phone']) : 'Not provided';
-$goal = isset($data['goal']) && !empty($data['goal']) ? htmlspecialchars($data['goal']) : 'Meeting Request';
-$date = isset($data['date']) && !empty($data['date']) ? htmlspecialchars($data['date']) : 'Flexible';
-$time = isset($data['time']) && !empty($data['time']) ? htmlspecialchars($data['time']) : 'Flexible';
-$message = isset($data['message']) && !empty($data['message']) ? htmlspecialchars($data['message']) : 'None';
+function cut($value, $maxLen) {
+    return function_exists('mb_substr') ? mb_substr($value, 0, $maxLen) : substr($value, 0, $maxLen);
+}
+
+// Single-line fields end up in mail headers: strip CR/LF so they cannot inject headers.
+function oneLine($value, $maxLen = 200) {
+    $value = preg_replace('/[\r\n\t]+/', ' ', (string) $value);
+    return cut(trim($value), $maxLen);
+}
+
+$name = oneLine($data['name']);
+$email = filter_var(oneLine($data['email']), FILTER_VALIDATE_EMAIL);
+if ($email === false) {
+    echo json_encode(['success' => false, 'error' => 'Please enter a valid email address']);
+    exit;
+}
+$phone = !empty($data['phone']) ? oneLine($data['phone'], 50) : 'Not provided';
+$goal = !empty($data['goal']) ? oneLine($data['goal'], 100) : 'Meeting Request';
+$date = !empty($data['date']) ? oneLine($data['date'], 50) : 'Flexible';
+$time = !empty($data['time']) ? oneLine($data['time'], 50) : 'Flexible';
+$message = !empty($data['message']) ? cut((string) $data['message'], 5000) : 'None';
 
 $subject = "New Meeting Request: {$goal} - {$name}";
 $body = "You received a new meeting request from the Vyro website.\n\n"
@@ -97,7 +103,7 @@ function sendSmtpMail($smtpHost, $smtpPort, $smtpUser, $smtpPass, $to, $fromEmai
     $read();
 
     $headers  = "From: =?UTF-8?B?" . base64_encode("Vyro Meetings") . "?= <{$smtpUser}>\r\n";
-    $headers .= "Reply-To: {$fromName} <{$fromEmail}>\r\n";
+    $headers .= "Reply-To: =?UTF-8?B?" . base64_encode($fromName) . "?= <{$fromEmail}>\r\n";
     $headers .= "To: <{$to}>\r\n";
     $headers .= "Subject: =?UTF-8?B?" . base64_encode($subject) . "?=\r\n";
     $headers .= "Date: " . date('r') . "\r\n";
@@ -105,6 +111,10 @@ function sendSmtpMail($smtpHost, $smtpPort, $smtpUser, $smtpPass, $to, $fromEmai
     $headers .= "Content-Type: text/plain; charset=UTF-8\r\n";
     $headers .= "Content-Transfer-Encoding: 8bit\r\n";
 
+    // Normalise line endings and dot-stuff (RFC 5321 4.5.2) so a line containing
+    // only "." in the message cannot end DATA early and smuggle SMTP commands.
+    $body = preg_replace('/\r\n|\r|\n/', "\r\n", $body);
+    $body = preg_replace('/^\./m', '..', $body);
     $write($headers . "\r\n" . $body . "\r\n.");
     $res = $read();
     $write("QUIT");

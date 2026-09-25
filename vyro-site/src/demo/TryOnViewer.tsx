@@ -49,69 +49,56 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
   productRef.current = activeProduct;
   cameraFacingRef.current = cameraFacing;
 
+  // Bumped on every (re)start and on unmount so late async results from a
+  // superseded engine are ignored instead of clobbering the live one.
+  const generationRef = useRef(0);
+
   const initEngine = useCallback(async () => {
     const videoElement = videoRef.current;
     const overlayCanvas = overlayCanvasRef.current;
     if (!videoElement || !overlayCanvas) return;
 
-    let cancelled = false;
+    const generation = ++generationRef.current;
+    const isCurrent = () => generation === generationRef.current;
 
     engineRef.current?.destroy();
-    engineRef.current = null;
+    setTracking(false);
 
     const engine = new TryOnEngine({
       onStatus: (s, msg) => {
-        if (!cancelled) {
-          setStatus(s);
-          if (msg) setStatusMessage(msg);
-        }
+        if (!isCurrent()) return;
+        setStatus(s);
+        setStatusMessage(msg ?? '');
       },
       onFps: () => {},
       onTracking: (value) => {
-        if (!cancelled) setTracking(value);
+        if (isCurrent()) setTracking(value);
       },
     });
+    engineRef.current = engine;
 
     try {
       await engine.init(
         { videoElement, overlayCanvas },
         { facingMode: cameraFacingRef.current },
       );
-      if (cancelled) {
-        engine.destroy();
-        return;
-      }
-
-      engineRef.current = engine;
+      if (!isCurrent()) return;
       engine.start();
       await engine.setProduct(productRef.current);
     } catch (err) {
-      if (!cancelled) {
+      engine.destroy();
+      if (engineRef.current === engine) engineRef.current = null;
+      if (isCurrent()) {
         setStatus('error');
         setStatusMessage(err instanceof Error ? err.message : 'Failed to start camera');
       }
     }
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
-    let cleanup: (() => void) | undefined;
-    let active = true;
-    void initEngine().then((fn) => {
-      if (!active) {
-        fn?.();
-        engineRef.current?.destroy();
-        engineRef.current = null;
-      } else {
-        cleanup = fn;
-      }
-    });
+    void initEngine();
     return () => {
-      active = false;
-      cleanup?.();
+      generationRef.current++;
       engineRef.current?.destroy();
       engineRef.current = null;
     };
@@ -194,7 +181,7 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
             {status === 'error' ? (
               <>
                 <p>{statusMessage || 'Camera access required'}</p>
-                <button type="button" className="tryon-btn tryon-btn--primary" onClick={initEngine}>
+                <button type="button" className="tryon-btn tryon-btn--primary" onClick={() => void initEngine()}>
                   Allow camera & retry
                 </button>
               </>

@@ -66,6 +66,8 @@ const WATCH_TUNING = {
 
 export class TryOnEngine {
   private video: HTMLVideoElement | null = null;
+  private stream: MediaStream | null = null;
+  private destroyed = false;
   private overlayCanvas: HTMLCanvasElement | null = null;
   private overlayCtx: CanvasRenderingContext2D | null = null;
 
@@ -161,17 +163,43 @@ export class TryOnEngine {
     this.resetSmoothing();
     this.lastTimestamp = -1;
 
-    if (this.video?.srcObject) {
-      const stream = this.video.srcObject as MediaStream;
-      stream.getTracks().forEach((t) => t.stop());
-    }
+    this.stopStream();
 
     this.callbacks.onStatus('loading', 'Switching camera...');
     await this.initCamera();
     this.callbacks.onStatus('ready');
   }
 
+  private stopStream() {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+  }
+
+  private async requestStream(): Promise<MediaStream> {
+    const facingMode = { ideal: this.facingMode };
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      });
+    } catch (err) {
+      // Some cameras reject resolution hints; retry with the bare minimum.
+      if (err instanceof DOMException && err.name === 'OverconstrainedError') {
+        return navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+      }
+      throw err;
+    }
+  }
+
   private async initCamera() {
+    if (!window.isSecureContext) {
+      throw new Error('Camera requires HTTPS. Open this page over https:// to use the try-on.');
+    }
+
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error(
         'Camera API is not available. Use HTTPS and a modern browser (Chrome, Safari, or Firefox).',
@@ -184,18 +212,14 @@ export class TryOnEngine {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: this.facingMode },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 },
-        },
-        audio: false,
-      });
+      stream = await this.requestStream();
     } catch (err) {
       if (err instanceof DOMException) {
         if (err.name === 'NotAllowedError') {
           throw new Error('Camera permission denied. Allow camera access in your browser.');
+        }
+        if (err.name === 'NotReadableError') {
+          throw new Error('Camera is in use by another app or tab. Close it and retry.');
         }
         if (err.name === 'NotFoundError') {
           throw new Error(
@@ -208,20 +232,25 @@ export class TryOnEngine {
       throw err;
     }
 
-    const track = stream.getVideoTracks()[0];
-    if (track) {
-      console.log('Vyro Active Camera:', track.label, track.getSettings());
+    if (this.destroyed) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new Error('Engine was destroyed');
     }
 
+    this.stream = stream;
     this.video.srcObject = stream;
     this.video.playsInline = true;
     this.video.muted = true;
     await this.video.play();
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      const started = performance.now();
       const check = () => {
-        if (this.video && this.video.videoWidth > 0) resolve();
-        else requestAnimationFrame(check);
+        if (this.destroyed) reject(new Error('Engine was destroyed'));
+        else if (this.video && this.video.videoWidth > 0) resolve();
+        else if (performance.now() - started > 5000) {
+          reject(new Error('Camera did not deliver any video. Retry or try another browser.'));
+        } else requestAnimationFrame(check);
       };
       check();
     });
@@ -261,6 +290,13 @@ export class TryOnEngine {
         loadFace('CPU'),
         loadHand('CPU'),
       ]);
+    }
+
+    if (this.destroyed) {
+      this.faceLandmarker?.close();
+      this.handLandmarker?.close();
+      this.faceLandmarker = null;
+      this.handLandmarker = null;
     }
   }
 
@@ -393,7 +429,8 @@ export class TryOnEngine {
 
     this.overlayCtx.clearRect(0, 0, vw, vh);
 
-    if (!product) return;
+    // No frame yet (e.g. mid camera switch); detectForVideo would throw.
+    if (!product || this.video.readyState < 2) return;
 
     const ts = this.nextTimestamp();
     let tracking = false;
@@ -541,7 +578,9 @@ export class TryOnEngine {
       smoothAngle,
       0.5,
       NECKLACE_ASSET.pendantAnchorY,
-      true,
+      // Mirroring swaps the landmark sides, turning the angle by ~180°; the
+      // vertical flip undoes that. Unmirrored (back camera) needs no flip.
+      this.mirror,
     );
   }
 
@@ -679,7 +718,7 @@ export class TryOnEngine {
       smoothAngle,
       tuning.anchorX,
       tuning.anchorY,
-      true,
+      this.mirror,
     );
   }
 
@@ -917,12 +956,16 @@ export class TryOnEngine {
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.stop();
-    if (this.video?.srcObject) {
-      const stream = this.video.srcObject as MediaStream;
-      stream.getTracks().forEach((t) => t.stop());
+    if (this.video && this.video.srcObject === this.stream) {
+      this.video.srcObject = null;
     }
+    this.stopStream();
     this.faceLandmarker?.close();
     this.handLandmarker?.close();
+    this.faceLandmarker = null;
+    this.handLandmarker = null;
   }
 }
