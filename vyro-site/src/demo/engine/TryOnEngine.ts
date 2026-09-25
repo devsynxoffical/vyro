@@ -66,7 +66,8 @@ const WATCH_TUNING = {
   wristTaper: 0.73,
   /** Case (incl. lugs) width relative to the visible wrist breadth */
   caseToWrist: 0.7,
-  forearmOffset: 0.06,
+  /** How far below the wrist joint the case sits, relative to wrist breadth */
+  forearmOffset: 0.3,
 };
 
 export class TryOnEngine {
@@ -942,8 +943,20 @@ export class TryOnEngine {
       targetDirY = baseArm.y;
     }
 
+    // The arm estimates are only an axis; make it point from the wrist towards
+    // the fingers so 12 o'clock faces the hand and the case sits down the
+    // forearm. Orient before smoothing so opposite directions never average out.
+    const middlePt = this.toScreen(middleMcp.x, middleMcp.y, w, h);
+    const handX = middlePt.x - wristPt.x;
+    const handY = middlePt.y - wristPt.y;
+    if (targetDirX * handX + targetDirY * handY < 0) {
+      targetDirX = -targetDirX;
+      targetDirY = -targetDirY;
+    }
+
     const smoothArm = this.watchArmDir.update(targetDirX, targetDirY);
-    const armAxis = this.normalizeDir(smoothArm.x, smoothArm.y);
+    let armAxis = this.normalizeDir(smoothArm.x, smoothArm.y);
+    if (armAxis.x * handX + armAxis.y * handY < 0) armAxis = { x: -armAxis.x, y: -armAxis.y };
 
     const wristBreadth = this.estimateWristBreadth(indexPt, pinkyPt, armAxis);
     const watchWidth =

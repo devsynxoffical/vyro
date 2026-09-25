@@ -270,6 +270,12 @@
   position: absolute;
   top: 14px;
   right: 14px;
+  /* Redesign.css also positions this from the bottom-centre; without these
+     resets the pill stretches over the whole video as a blurred dark oval. */
+  bottom: auto;
+  left: auto;
+  transform: none;
+  max-width: calc(100% - 180px);
   z-index: 5;
   margin: 0;
   padding: 6px 12px;
