@@ -3,6 +3,7 @@ import {
   HandLandmarker,
   PoseLandmarker,
   FilesetResolver,
+  type Landmark,
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
 import { PRODUCTS, type Product } from '../types';
@@ -85,7 +86,25 @@ const GLASSES_TUNING: Record<
 
 const DEFAULT_GLASSES_TUNING = { widthFactor: 1.0, anchorX: 0.5, anchorY: 0.405 };
 
+/**
+ * Detection drops out for a frame or two on fast moves or in low light. Keep
+ * the last overlay up briefly rather than blinking, and only restart the
+ * smoothing after a real loss.
+ */
+const HOLD_FRAMES = 8;
+const RESET_AFTER_LOST_FRAMES = 15;
+
 const WATCH_TUNING = {
+  /** Watch case diameter and wrist width in metres, for metric sizing */
+  caseMeters: 0.040,
+  wristMeters: 0.06,
+  /**
+   * On a fist the wrist landmark lands a couple of centimetres down the
+   * forearm; pull the case back towards the hand by this much (in wrist
+   * widths) for a closed hand, fading to nothing for an open one.
+   */
+  fistPull: 0.3,
+  /** Fallbacks when hand world landmarks are unavailable */
   /** Wrist width relative to the knuckle span (index MCP to pinky MCP) */
   wristToKnuckles: 0.82,
   /** Wrist width relative to the palm length (wrist to middle MCP) */
@@ -156,13 +175,13 @@ export class TryOnEngine {
   private glassesScale = new SmoothValue(0.35, { max: 0.8, scale: 0.3 });
   private glassesRotation = new SmoothAngle(0.3, { max: 0.8, scale: 0.4 });
 
-  private watchCenter = new SmoothPoint(0.22, { max: 0.85, scale: 40 });
-  private watchScale = new SmoothValue(0.2, { max: 0.7, scale: 0.3 });
-  private watchRotation = new SmoothAngle(0.18, { max: 0.7, scale: 0.5 });
+  private watchCenter = new SmoothPoint(0.12, { max: 0.85, scale: 40, dead: 3 });
+  private watchScale = new SmoothValue(0.1, { max: 0.6, scale: 0.3, dead: 0.02 });
+  private watchRotation = new SmoothAngle(0.12, { max: 0.7, scale: 0.5, dead: 0.02 });
   /** 0 or PI: which perpendicular of the forearm 12 o'clock currently points to */
   private watchFlip: number | null = null;
   private watchCanvas: HTMLCanvasElement | null = null;
-  private watchArmDir = new SmoothPoint(0.3, { max: 0.8, scale: 0.6 });
+  private watchArmDir = new SmoothPoint(0.2, { max: 0.8, scale: 0.6, dead: 0.03 });
   private lastPose: NormalizedLandmark[] | null = null;
   private poseFrame = 0;
 
@@ -171,6 +190,9 @@ export class TryOnEngine {
   private lastFrameTime = 0;
   private frameCount = 0;
   private lastTracking = false;
+  private lostFrames = 0;
+  /** Redraws the last overlay, used to bridge short detection dropouts */
+  private lastDraw: (() => void) | null = null;
   private callbacks: EngineCallbacks;
 
   constructor(callbacks: EngineCallbacks) {
@@ -455,6 +477,8 @@ export class TryOnEngine {
     this.activeProduct = product;
     this.resetSmoothing();
     this.lastTracking = false;
+    this.lastDraw = null;
+    this.lostFrames = RESET_AFTER_LOST_FRAMES;
 
     const loaded = await this.getImage(product.image);
     // A newer selection arrived while this image was loading.
@@ -548,15 +572,17 @@ export class TryOnEngine {
     if (!product || this.video.readyState < 2) return;
 
     const ts = this.nextTimestamp();
-    let tracking = false;
+    let detected = false;
+    // True when the target was just re-acquired after a real loss.
+    const fresh = this.lostFrames >= RESET_AFTER_LOST_FRAMES;
 
     switch (product.type) {
       case 'glasses': {
         if (!this.faceLandmarker) break;
         const res = this.faceLandmarker.detectForVideo(this.video, ts);
         if (res.faceLandmarks.length > 0) {
-          tracking = true;
-          if (!this.lastTracking) {
+          detected = true;
+          if (fresh) {
             this.glassesCenter.reset();
             this.glassesScale.reset();
             this.glassesRotation.reset();
@@ -570,8 +596,8 @@ export class TryOnEngine {
         const face = this.faceLandmarker?.detectForVideo(this.video, ts);
         const target = this.necklaceTarget(pose, face?.faceLandmarks[0], vw, vh);
         if (target) {
-          tracking = true;
-          if (!this.lastTracking) {
+          detected = true;
+          if (fresh) {
             this.neckCenter.reset();
             this.neckScale.reset();
             this.neckRotation.reset();
@@ -585,8 +611,8 @@ export class TryOnEngine {
         if (!this.handLandmarker) break;
         const res = this.handLandmarker.detectForVideo(this.video, ts);
         if (res.landmarks.length > 0) {
-          tracking = true;
-          if (!this.lastTracking) {
+          detected = true;
+          if (fresh) {
             this.ringCenter.reset();
             this.ringScale.reset();
             this.ringRotation.reset();
@@ -602,6 +628,19 @@ export class TryOnEngine {
           }
         }
         break;
+      }
+    }
+
+    let tracking = detected;
+    if (detected) {
+      this.lostFrames = 0;
+    } else {
+      this.lostFrames++;
+      if (this.lostFrames <= HOLD_FRAMES && this.lastDraw) {
+        this.lastDraw();
+        tracking = true;
+      } else {
+        this.lastDraw = null;
       }
     }
 
@@ -626,6 +665,20 @@ export class TryOnEngine {
     anchorX = 0.5,
     anchorY = 0.5,
     flipV = false,
+  ) {
+    this.lastDraw = () => this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV);
+    this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV);
+  }
+
+  private paintImage(
+    asset: LoadedImage,
+    x: number,
+    y: number,
+    width: number,
+    angle: number,
+    anchorX: number,
+    anchorY: number,
+    flipV: boolean,
   ) {
     if (!this.overlayCtx) return;
     const height = width / asset.aspect;
@@ -918,6 +971,53 @@ export class TryOnEngine {
     return best;
   }
 
+  /**
+   * Screen pixels per metre for this hand, from the metric world landmarks.
+   * Foreshortening can only shrink a pixel distance, so the least
+   * foreshortened landmark pairs (largest px/m) carry the true scale; this is
+   * independent of whether the hand is a fist, flat, or edge-on.
+   */
+  private handPxPerMeter(
+    hand: NormalizedLandmark[],
+    world: Landmark[] | undefined,
+    w: number,
+    h: number,
+  ): number | null {
+    if (!world || world.length < 21) return null;
+    const pairs: [number, number][] = [
+      [0, 5], [0, 9], [0, 13], [0, 17], [5, 17], [5, 9], [9, 13], [13, 17], [0, 2], [2, 5],
+    ];
+    const ratios: number[] = [];
+    for (const [a, b] of pairs) {
+      const pa = this.toScreen(hand[a].x, hand[a].y, w, h);
+      const pb = this.toScreen(hand[b].x, hand[b].y, w, h);
+      const px = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+      const m = Math.hypot(
+        world[a].x - world[b].x,
+        world[a].y - world[b].y,
+        world[a].z - world[b].z,
+      );
+      if (m > 0.01) ratios.push(px / m);
+    }
+    if (ratios.length < 4) return null;
+    // Upper third rather than the maximum: a single noisy pair would inflate it.
+    ratios.sort((x, y) => y - x);
+    return ratios[Math.floor(ratios.length * 0.3)];
+  }
+
+  /**
+   * 0 for a closed fist up to ~1 for an open hand: mean fingertip-to-knuckle
+   * distance over palm length, in metric space so it ignores camera angle.
+   */
+  private handOpenness(world: Landmark[] | undefined): number | null {
+    if (!world || world.length < 21) return null;
+    const d = (a: number, b: number) =>
+      Math.hypot(world[a].x - world[b].x, world[a].y - world[b].y, world[a].z - world[b].z);
+    const palm = d(0, 9) || 1;
+    const curl = (d(8, 5) + d(12, 9) + d(16, 13) + d(20, 17)) / 4 / palm;
+    return Math.min(1, Math.max(0, (curl - 0.35) / 0.6));
+  }
+
   private drawWatch(
     result: ReturnType<HandLandmarker['detectForVideo']>,
     pose: NormalizedLandmark[] | null,
@@ -926,7 +1026,7 @@ export class TryOnEngine {
   ) {
     if (!this.watchAsset) return;
 
-    let bestHand = result.landmarks[0];
+    let bestIndex = 0;
     let bestScore = -1;
     for (let i = 0; i < result.landmarks.length; i++) {
       const hand = result.landmarks[i];
@@ -935,9 +1035,13 @@ export class TryOnEngine {
       const score = Math.hypot(middleLm.x - wristLm.x, middleLm.y - wristLm.y);
       if (score > bestScore) {
         bestScore = score;
-        bestHand = hand;
+        bestIndex = i;
       }
     }
+    const bestHand = result.landmarks[bestIndex];
+    const world = result.worldLandmarks?.[bestIndex];
+    const pxPerMeter = this.handPxPerMeter(bestHand, world, w, h);
+    const openness = this.handOpenness(world) ?? 1;
 
     const wrist = bestHand[0];
     const indexMcp = bestHand[5];
@@ -986,8 +1090,8 @@ export class TryOnEngine {
       c.fillStyle = '#fff';
       c.font = '16px monospace';
       c.fillText(
-        `pose:${this.poseLandmarker ? 'on' : 'off'} axis:${target === smoothArm ? '' : ''}${armAxis.x.toFixed(2)},${armAxis.y.toFixed(2)} knuckles:${knuckleSpan.toFixed(0)}`,
-        12,
+        `pose:${this.poseLandmarker ? 'on' : 'off'} axis:${armAxis.x.toFixed(2)},${armAxis.y.toFixed(2)} knuckles:${knuckleSpan.toFixed(0)} px/cm:${pxPerMeter ? (pxPerMeter / 100).toFixed(1) : '-'} open:${openness.toFixed(2)}`,
+        160,
         h - 16,
       );
       c.restore();
@@ -998,16 +1102,24 @@ export class TryOnEngine {
       (middleMcp.y - wrist.y) * h,
       (middleMcp.z - wrist.z) * w,
     );
-    // Knuckle span foreshortens on a fist, palm length on a flat hand facing
-    // the camera edge-on; the larger of the two is the better wrist estimate.
-    const wristBreadth = Math.max(
-      this.estimateWristBreadth(indexPt, pinkyPt, armAxis) * WATCH_TUNING.wristToKnuckles,
-      palmLen * WATCH_TUNING.wristToPalm,
-    );
-    const watchWidth =
-      (wristBreadth * WATCH_TUNING.caseToWrist) / this.watchGeometry.caseWidthFrac;
-    const watchX = wristPt.x - armAxis.x * wristBreadth * WATCH_TUNING.forearmOffset;
-    const watchY = wristPt.y - armAxis.y * wristBreadth * WATCH_TUNING.forearmOffset;
+    let wristBreadth: number;
+    let caseWidth: number;
+    if (pxPerMeter) {
+      wristBreadth = WATCH_TUNING.wristMeters * pxPerMeter;
+      caseWidth = WATCH_TUNING.caseMeters * pxPerMeter;
+    } else {
+      // Knuckle span foreshortens on a fist, palm length on a flat hand facing
+      // the camera edge-on; the larger of the two is the better wrist estimate.
+      wristBreadth = Math.max(
+        this.estimateWristBreadth(indexPt, pinkyPt, armAxis) * WATCH_TUNING.wristToKnuckles,
+        palmLen * WATCH_TUNING.wristToPalm,
+      );
+      caseWidth = wristBreadth * WATCH_TUNING.caseToWrist;
+    }
+    const watchWidth = caseWidth / this.watchGeometry.caseWidthFrac;
+    const alongArm = WATCH_TUNING.forearmOffset - WATCH_TUNING.fistPull * (1 - openness);
+    const watchX = wristPt.x - armAxis.x * wristBreadth * alongArm;
+    const watchY = wristPt.y - armAxis.y * wristBreadth * alongArm;
 
     // The strap wraps around the wrist, so the 12-6 axis is perpendicular to
     // the forearm. Two perpendiculars are possible; prefer the one that puts
@@ -1031,7 +1143,7 @@ export class TryOnEngine {
     const smoothPos = this.watchCenter.update(watchX, watchY);
     const smoothScale = this.watchScale.update(watchWidth);
     const rotation = this.watchRotation.update(angle);
-    const caseWidth = smoothScale * this.watchGeometry.caseWidthFrac;
+    const smoothCase = smoothScale * this.watchGeometry.caseWidthFrac;
 
     this.drawWatchWrapped(
       this.watchAsset,
@@ -1040,7 +1152,7 @@ export class TryOnEngine {
       smoothScale,
       rotation,
       this.watchGeometry.caseCenterY,
-      caseWidth * WATCH_TUNING.strapBand,
+      smoothCase * WATCH_TUNING.strapBand,
     );
   }
 
@@ -1050,6 +1162,19 @@ export class TryOnEngine {
    * wrist's edges instead of lying flat on top of the arm.
    */
   private drawWatchWrapped(
+    asset: LoadedImage,
+    x: number,
+    y: number,
+    width: number,
+    angle: number,
+    anchorY: number,
+    band: number,
+  ) {
+    this.lastDraw = () => this.paintWatchWrapped(asset, x, y, width, angle, anchorY, band);
+    this.paintWatchWrapped(asset, x, y, width, angle, anchorY, band);
+  }
+
+  private paintWatchWrapped(
     asset: LoadedImage,
     x: number,
     y: number,

@@ -8,11 +8,14 @@ export interface SmoothOptions {
   max?: number;
   /** Change size at which the rate has risen by 1 (units of the value) */
   scale?: number;
+  /** Changes below this are treated as jitter and smoothed at the base rate */
+  dead?: number;
 }
 
 function rateFor(base: number, change: number, opts: SmoothOptions): number {
   if (opts.max === undefined || !opts.scale) return base;
-  return Math.min(opts.max, base + change / opts.scale);
+  const beyond = Math.max(0, change - (opts.dead ?? 0));
+  return Math.min(opts.max, base + beyond / opts.scale);
 }
 
 export class SmoothPoint {
