@@ -1,4 +1,4 @@
-import { EMAIL, openMeetingModal } from '../../lib/constants';
+import { EMAIL, INSTAGRAM, openMeetingModal } from '../../lib/constants';
 
 /** Footer for non-home routes only — home uses the redesign inline footer. */
 export function SiteFooter() {
@@ -28,7 +28,9 @@ export function SiteFooter() {
         <a className="contact-links__plain" href={EMAIL}>
           info@vyroes.tech
         </a>
-        <a href="#">LinkedIn</a>
+        <a href={INSTAGRAM} target="_blank" rel="noopener noreferrer">
+          Instagram
+        </a>
       </div>
       <div className="foot-meta">
         <span>VYRO — AI VIRTUAL TRY-ON</span>

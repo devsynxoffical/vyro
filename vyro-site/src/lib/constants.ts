@@ -1,7 +1,6 @@
 export const DEMO_URL = '/try-on';
 export const EMAIL = 'mailto:info@vyroes.tech';
-export const INSTAGRAM =
-  'https://www.instagram.com/vyro.omn?igsi=MWN2NnZ4aWljZXRieg%3D%3D&utm_source=qr';
+export const INSTAGRAM = 'https://www.instagram.com/vyro.omn/';
 export const SITE_ICON = '/brand/vyro-mark.png';
 
 export const NAV = [
