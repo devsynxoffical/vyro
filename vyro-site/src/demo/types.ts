@@ -82,15 +82,37 @@ export const GLASSES_VARIANTS: Product[] = [
   },
 ];
 
-export const WATCH: Product = {
-  id: 'watch-1',
-  name: 'Matte Black Watch',
-  shortName: 'Matte Black',
-  type: 'watch',
-  image: '/products/watch-black.png',
-  price: '$349',
-  description: 'All-black minimalist watch with metal bracelet',
-};
+export const WATCH_VARIANTS: Product[] = [
+  {
+    id: 'watch-1',
+    name: 'Steel Sunburst Watch',
+    shortName: 'Steel',
+    type: 'watch',
+    image: '/products/watch-steel.png',
+    price: '$349',
+    description: 'Stainless steel case, black sunburst dial, steel link bracelet',
+  },
+  {
+    id: 'watch-2',
+    name: 'Gold Dress Watch',
+    shortName: 'Gold & Leather',
+    type: 'watch',
+    image: '/products/watch-gold.png',
+    price: '$429',
+    description: 'Gold case, ivory dial, brown leather strap',
+  },
+  {
+    id: 'watch-3',
+    name: 'Matte Black Watch',
+    shortName: 'Matte Black',
+    type: 'watch',
+    image: '/products/watch-matte-black.png',
+    price: '$329',
+    description: 'Matte black steel case and bracelet, minimalist dial',
+  },
+];
+
+export const WATCH: Product = WATCH_VARIANTS[0];
 
 export const PRODUCT_CATEGORIES: ProductCategory[] = [
   {
@@ -121,7 +143,7 @@ export const PRODUCT_CATEGORIES: ProductCategory[] = [
 
 export const PRODUCTS: Product[] = [
   ...GLASSES_VARIANTS,
-  WATCH,
+  ...WATCH_VARIANTS,
   NECKLACE,
   ...RING_VARIANTS,
 ];

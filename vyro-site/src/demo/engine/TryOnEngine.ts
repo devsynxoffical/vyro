@@ -7,6 +7,11 @@ import { PRODUCTS, type Product } from '../types';
 import { estimateFingerSize } from './fingerSizing';
 import { NECKLACE_ASSET, computeNecklacePlacement } from './necklacePlacement';
 import { SmoothAngle, SmoothPoint, SmoothValue } from './smoothing';
+import {
+  DEFAULT_WATCH_GEOMETRY,
+  measureWatchGeometry,
+  type WatchGeometry,
+} from './watchGeometry';
 
 const WASM_CDN =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
@@ -59,9 +64,9 @@ const DEFAULT_GLASSES_TUNING = { widthFactor: 1.0, anchorX: 0.5, anchorY: 0.405 
 
 const WATCH_TUNING = {
   wristTaper: 0.73,
-  caseImageFill: 0.88,
+  /** Case (incl. lugs) width relative to the visible wrist breadth */
+  caseToWrist: 0.7,
   forearmOffset: 0.06,
-  anchorY: 0.44,
 };
 
 export class TryOnEngine {
@@ -78,6 +83,8 @@ export class TryOnEngine {
   private necklaceAsset: LoadedImage | null = null;
   private glassesAsset: LoadedImage | null = null;
   private watchAsset: LoadedImage | null = null;
+  private watchGeometry: WatchGeometry = DEFAULT_WATCH_GEOMETRY;
+  private watchGeometryCache = new Map<string, WatchGeometry>();
   private imageCache = new Map<string, LoadedImage>();
 
   private animationId = 0;
@@ -361,6 +368,8 @@ export class TryOnEngine {
     this.lastTracking = false;
 
     const loaded = await this.getImage(product.image);
+    // A newer selection arrived while this image was loading.
+    if (this.activeProduct !== product) return;
     switch (product.type) {
       case 'necklace':
         this.necklaceAsset = loaded;
@@ -371,9 +380,16 @@ export class TryOnEngine {
       case 'ring':
         this.ringAsset = loaded;
         break;
-      case 'watch':
+      case 'watch': {
+        let geometry = this.watchGeometryCache.get(product.image);
+        if (!geometry) {
+          geometry = measureWatchGeometry(loaded.image);
+          this.watchGeometryCache.set(product.image, geometry);
+        }
+        this.watchGeometry = geometry;
         this.watchAsset = loaded;
         break;
+      }
     }
   }
 
@@ -930,7 +946,8 @@ export class TryOnEngine {
     const armAxis = this.normalizeDir(smoothArm.x, smoothArm.y);
 
     const wristBreadth = this.estimateWristBreadth(indexPt, pinkyPt, armAxis);
-    const watchWidth = wristBreadth / WATCH_TUNING.caseImageFill;
+    const watchWidth =
+      (wristBreadth * WATCH_TUNING.caseToWrist) / this.watchGeometry.caseWidthFrac;
     const watchX = wristPt.x - armAxis.x * wristBreadth * WATCH_TUNING.forearmOffset;
     const watchY = wristPt.y - armAxis.y * wristBreadth * WATCH_TUNING.forearmOffset;
 
@@ -951,7 +968,7 @@ export class TryOnEngine {
       smoothScale,
       rotation,
       0.5,
-      WATCH_TUNING.anchorY,
+      this.watchGeometry.caseCenterY,
     );
   }
 
