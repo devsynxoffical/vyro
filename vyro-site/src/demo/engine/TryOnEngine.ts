@@ -76,6 +76,8 @@ const RING_TUNING: Record<string, { bandRatio: number; anchorY: number }> = {
 };
 
 const DEFAULT_RING_TUNING = { bandRatio: 0.62, anchorY: 0.54 };
+/** Outer width of a ring band on a ring finger, in metres (finger + band) */
+const RING_OUTER_METERS = 0.021;
 
 const GLASSES_TUNING: Record<
   string,
@@ -163,9 +165,9 @@ export class TryOnEngine {
 
   // Low base rates hide landmark jitter while still; the adaptive max lets
   // every overlay keep up with real movement instead of trailing behind it.
-  private ringCenter = new SmoothPoint(0.28, { max: 0.85, scale: 40 });
-  private ringScale = new SmoothValue(0.28, { max: 0.7, scale: 0.3 });
-  private ringRotation = new SmoothAngle(0.22, { max: 0.7, scale: 0.5 });
+  private ringCenter = new SmoothPoint(0.2, { max: 0.85, scale: 30, dead: 2 });
+  private ringScale = new SmoothValue(0.12, { max: 0.6, scale: 0.3, dead: 0.02 });
+  private ringRotation = new SmoothAngle(0.18, { max: 0.7, scale: 0.4, dead: 0.02 });
 
   private neckCenter = new SmoothPoint(0.3, { max: 0.85, scale: 40 });
   private neckScale = new SmoothValue(0.3, { max: 0.7, scale: 0.3 });
@@ -783,9 +785,9 @@ export class TryOnEngine {
   ) {
     if (!this.ringAsset || !this.activeProduct) return;
 
-    let bestHand = result.landmarks[0];
+    let bestIndex = 0;
     let bestScore = -1;
-    for (const hand of result.landmarks) {
+    result.landmarks.forEach((hand, i) => {
       const ringMcp = hand[13];
       const ringPip = hand[14];
       const ringTip = hand[16];
@@ -794,9 +796,16 @@ export class TryOnEngine {
         Math.hypot(ringTip.x - ringPip.x, ringTip.y - ringPip.y);
       if (score > bestScore) {
         bestScore = score;
-        bestHand = hand;
+        bestIndex = i;
       }
-    }
+    });
+    const bestHand = result.landmarks[bestIndex];
+    const pxPerMeter = this.handPxPerMeter(
+      bestHand,
+      result.worldLandmarks?.[bestIndex],
+      w,
+      h,
+    );
 
     const ringMcp = bestHand[13];
     const ringPip = bestHand[14];
@@ -824,7 +833,12 @@ export class TryOnEngine {
     });
 
     const tuning = RING_TUNING[this.activeProduct.id] ?? DEFAULT_RING_TUNING;
-    const ringWidth = sizing.ringOuterWidth / tuning.bandRatio;
+    // Real-world sizing when the metric hand is available; the on-screen
+    // finger geometry is only a fallback since it changes with hand pose.
+    const ringOuterWidth = pxPerMeter
+      ? RING_OUTER_METERS * pxPerMeter
+      : sizing.ringOuterWidth;
+    const ringWidth = ringOuterWidth / tuning.bandRatio;
     const angle = Math.atan2(pipPt.y - mcpPt.y, pipPt.x - mcpPt.x) + Math.PI / 2;
 
     const smoothPos = this.ringCenter.update(centerX, centerY);
