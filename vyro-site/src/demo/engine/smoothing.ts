@@ -1,12 +1,29 @@
+/**
+ * Exponential smoothing with an optional adaptive rate: when `max` is given the
+ * rate rises with the size of the change (a one-euro style filter), so slow
+ * drift is damped while fast movement is followed without lag.
+ */
+export interface SmoothOptions {
+  /** Highest rate to use for large changes */
+  max?: number;
+  /** Change size at which the rate has risen by 1 (units of the value) */
+  scale?: number;
+}
+
+function rateFor(base: number, change: number, opts: SmoothOptions): number {
+  if (opts.max === undefined || !opts.scale) return base;
+  return Math.min(opts.max, base + change / opts.scale);
+}
+
 export class SmoothPoint {
   private x = 0;
   private y = 0;
   private initialized = false;
-  private alpha: number;
 
-  constructor(alpha = 0.35) {
-    this.alpha = alpha;
-  }
+  constructor(
+    private alpha = 0.35,
+    private opts: SmoothOptions = {},
+  ) {}
 
   update(targetX: number, targetY: number): { x: number; y: number } {
     if (!this.initialized) {
@@ -16,8 +33,9 @@ export class SmoothPoint {
       return { x: this.x, y: this.y };
     }
 
-    this.x += (targetX - this.x) * this.alpha;
-    this.y += (targetY - this.y) * this.alpha;
+    const a = rateFor(this.alpha, Math.hypot(targetX - this.x, targetY - this.y), this.opts);
+    this.x += (targetX - this.x) * a;
+    this.y += (targetY - this.y) * a;
     return { x: this.x, y: this.y };
   }
 
@@ -29,11 +47,11 @@ export class SmoothPoint {
 export class SmoothValue {
   private value = 0;
   private initialized = false;
-  private alpha: number;
 
-  constructor(alpha = 0.3) {
-    this.alpha = alpha;
-  }
+  constructor(
+    private alpha = 0.3,
+    private opts: SmoothOptions = {},
+  ) {}
 
   update(target: number): number {
     if (!this.initialized) {
@@ -42,7 +60,9 @@ export class SmoothValue {
       return this.value;
     }
 
-    this.value += (target - this.value) * this.alpha;
+    // Scale is relative to the value itself so it works for any pixel size.
+    const rel = Math.abs(target - this.value) / (Math.abs(this.value) || 1);
+    this.value += (target - this.value) * rateFor(this.alpha, rel, this.opts);
     return this.value;
   }
 
@@ -54,11 +74,11 @@ export class SmoothValue {
 export class SmoothAngle {
   private value = 0;
   private initialized = false;
-  private alpha: number;
 
-  constructor(alpha = 0.3) {
-    this.alpha = alpha;
-  }
+  constructor(
+    private alpha = 0.3,
+    private opts: SmoothOptions = {},
+  ) {}
 
   update(target: number): number {
     if (!this.initialized) {
@@ -71,7 +91,7 @@ export class SmoothAngle {
     while (diff > Math.PI) diff -= 2 * Math.PI;
     while (diff < -Math.PI) diff += 2 * Math.PI;
 
-    this.value += diff * this.alpha;
+    this.value += diff * rateFor(this.alpha, Math.abs(diff), this.opts);
     return this.value;
   }
 

@@ -94,10 +94,10 @@ const WATCH_TUNING = {
   caseToWrist: 0.92,
   /** How far below the wrist joint the case sits, relative to wrist width */
   forearmOffset: 0.08,
-  /** Visible strap band across the wrist, relative to wrist width */
-  strapBand: 1.25,
+  /** Visible strap band across the wrist, relative to the case width */
+  strapBand: 1.75,
   /** Fraction of the band that is fully opaque before fading over the edge */
-  strapSolid: 0.72,
+  strapSolid: 0.6,
   /** Hysteresis before flipping which way 12 o'clock points */
   flipMargin: 0.35,
 };
@@ -142,25 +142,29 @@ export class TryOnEngine {
   private mirror = true;
   private lastTimestamp = -1;
 
-  private ringCenter = new SmoothPoint(0.28);
-  private ringScale = new SmoothValue(0.28);
-  private ringRotation = new SmoothAngle(0.22);
+  // Low base rates hide landmark jitter while still; the adaptive max lets
+  // every overlay keep up with real movement instead of trailing behind it.
+  private ringCenter = new SmoothPoint(0.28, { max: 0.85, scale: 40 });
+  private ringScale = new SmoothValue(0.28, { max: 0.7, scale: 0.3 });
+  private ringRotation = new SmoothAngle(0.22, { max: 0.7, scale: 0.5 });
 
-  private neckCenter = new SmoothPoint(0.4);
-  private neckScale = new SmoothValue(0.35);
-  private neckRotation = new SmoothAngle(0.3);
+  private neckCenter = new SmoothPoint(0.3, { max: 0.85, scale: 40 });
+  private neckScale = new SmoothValue(0.3, { max: 0.7, scale: 0.3 });
+  private neckRotation = new SmoothAngle(0.3, { max: 0.7, scale: 0.5 });
 
-  private glassesCenter = new SmoothPoint(0.4);
-  private glassesScale = new SmoothValue(0.35);
-  private glassesRotation = new SmoothAngle(0.3);
+  private glassesCenter = new SmoothPoint(0.4, { max: 0.9, scale: 30 });
+  private glassesScale = new SmoothValue(0.35, { max: 0.8, scale: 0.3 });
+  private glassesRotation = new SmoothAngle(0.3, { max: 0.8, scale: 0.4 });
 
-  private watchCenter = new SmoothPoint(0.16);
-  private watchScale = new SmoothValue(0.18);
-  private watchRotation = new SmoothAngle(0.14);
+  private watchCenter = new SmoothPoint(0.22, { max: 0.85, scale: 40 });
+  private watchScale = new SmoothValue(0.2, { max: 0.7, scale: 0.3 });
+  private watchRotation = new SmoothAngle(0.18, { max: 0.7, scale: 0.5 });
   /** 0 or PI: which perpendicular of the forearm 12 o'clock currently points to */
   private watchFlip: number | null = null;
   private watchCanvas: HTMLCanvasElement | null = null;
-  private watchArmDir = new SmoothPoint(0.2);
+  private watchArmDir = new SmoothPoint(0.3, { max: 0.8, scale: 0.6 });
+  private lastPose: NormalizedLandmark[] | null = null;
+  private poseFrame = 0;
 
   /** ?debug in the URL draws landmarks and the arm axis over the video. */
   private debug = typeof location !== 'undefined' && /[?&]debug/.test(location.search);
@@ -235,8 +239,8 @@ export class TryOnEngine {
       return await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
         audio: false,
       });
@@ -389,10 +393,14 @@ export class TryOnEngine {
     }
   }
 
+  /** Pose changes slowly relative to the hand, so it runs every other frame. */
   private detectPose(ts: number): NormalizedLandmark[] | null {
     if (!this.poseLandmarker || !this.video) return null;
-    const res = this.poseLandmarker.detectForVideo(this.video, ts);
-    return res.landmarks[0] ?? null;
+    if (this.poseFrame++ % 2 === 0) {
+      const res = this.poseLandmarker.detectForVideo(this.video, ts);
+      this.lastPose = res.landmarks[0] ?? null;
+    }
+    return this.lastPose;
   }
 
   private visible(lm: NormalizedLandmark | undefined): lm is NormalizedLandmark {
@@ -1014,6 +1022,8 @@ export class TryOnEngine {
       const other = this.watchFlip === 0 ? Math.PI : 0;
       if (upness(other) > upness(this.watchFlip) + WATCH_TUNING.flipMargin) {
         this.watchFlip = other;
+        // Snap rather than spin the dial half a turn.
+        this.watchRotation.reset();
       }
     }
     const angle = crownToHand + this.watchFlip;
@@ -1021,7 +1031,7 @@ export class TryOnEngine {
     const smoothPos = this.watchCenter.update(watchX, watchY);
     const smoothScale = this.watchScale.update(watchWidth);
     const rotation = this.watchRotation.update(angle);
-    const smoothBreadth = smoothScale * this.watchGeometry.caseWidthFrac / WATCH_TUNING.caseToWrist;
+    const caseWidth = smoothScale * this.watchGeometry.caseWidthFrac;
 
     this.drawWatchWrapped(
       this.watchAsset,
@@ -1030,7 +1040,7 @@ export class TryOnEngine {
       smoothScale,
       rotation,
       this.watchGeometry.caseCenterY,
-      smoothBreadth * WATCH_TUNING.strapBand,
+      caseWidth * WATCH_TUNING.strapBand,
     );
   }
 
@@ -1081,10 +1091,10 @@ export class TryOnEngine {
 
     // Shade the strap as it turns away from the light over the edges.
     const shade = octx.createLinearGradient(0, 0, 0, height);
-    shade.addColorStop(stop(centerY - half), 'rgba(0,0,0,0.55)');
-    shade.addColorStop(stop(centerY - solid * 0.6), 'rgba(0,0,0,0)');
-    shade.addColorStop(stop(centerY + solid * 0.6), 'rgba(0,0,0,0)');
-    shade.addColorStop(stop(centerY + half), 'rgba(0,0,0,0.55)');
+    shade.addColorStop(stop(centerY - half), 'rgba(0,0,0,0.5)');
+    shade.addColorStop(stop(centerY - solid), 'rgba(0,0,0,0)');
+    shade.addColorStop(stop(centerY + solid), 'rgba(0,0,0,0)');
+    shade.addColorStop(stop(centerY + half), 'rgba(0,0,0,0.5)');
     octx.globalCompositeOperation = 'source-atop';
     octx.fillStyle = shade;
     octx.fillRect(0, 0, cw, ch);
