@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 200" width="120" height="200">
+  <defs>
+    <linearGradient id="goldD" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f5e6a8"/>
+      <stop offset="50%" style="stop-color:#d4af37"/>
+      <stop offset="100%" style="stop-color:#b8860b"/>
+    </linearGradient>
+    <radialGradient id="ruby" cx="45%" cy="35%" r="55%">
+      <stop offset="0%" style="stop-color:#ff8a8a"/>
+      <stop offset="50%" style="stop-color:#c0392b"/>
+      <stop offset="100%" style="stop-color:#7b241c"/>
+    </radialGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity="0.35"/></filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M 60,6 L 58,22 Q 60,30 62,22 Z" fill="url(#goldD)"/>
+    <line x1="60" y1="22" x2="60" y2="75" stroke="url(#goldD)" stroke-width="1.5"/>
+    <polygon points="60,78 44,108 60,125 76,108" fill="url(#ruby)" stroke="#922b21" stroke-width="0.5"/>
+    <polygon points="60,78 52,100 60,110" fill="white" opacity="0.35"/>
+  </g>
+</svg>

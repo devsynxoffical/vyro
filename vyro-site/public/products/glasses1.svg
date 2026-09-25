@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 140" width="400" height="140">
+  <defs>
+    <linearGradient id="frame1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3d3d45"/>
+      <stop offset="45%" stop-color="#1c1c22"/>
+      <stop offset="100%" stop-color="#4a4a54"/>
+    </linearGradient>
+    <linearGradient id="lens1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#b8d4f0" stop-opacity="0.45"/>
+      <stop offset="55%" stop-color="#5a7a9a" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#2a3a4a" stop-opacity="0.5"/>
+    </linearGradient>
+    <linearGradient id="shine1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="sh1">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <g filter="url(#sh1)">
+    <!-- Left temple -->
+    <path d="M 38 70 L 8 58" stroke="url(#frame1)" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <!-- Right temple -->
+    <path d="M 362 70 L 392 58" stroke="url(#frame1)" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <!-- Left lens -->
+    <polygon points="165,70 140,38 72,38 46,70 72,102 140,102" fill="url(#lens1)" stroke="url(#frame1)" stroke-width="11" stroke-linejoin="round"/>
+    <!-- Right lens -->
+    <polygon points="354,70 328,38 260,38 234,70 260,102 328,102" fill="url(#lens1)" stroke="url(#frame1)" stroke-width="11" stroke-linejoin="round"/>
+    <!-- Bridge -->
+    <path d="M 165 70 L 234 70" stroke="url(#frame1)" stroke-width="10" stroke-linecap="round" fill="none"/>
+    <!-- Lens highlights -->
+    <ellipse cx="98" cy="58" rx="18" ry="12" fill="url(#shine1)" opacity="0.7"/>
+    <ellipse cx="286" cy="58" rx="18" ry="12" fill="url(#shine1)" opacity="0.7"/>
+  </g>
+</svg>

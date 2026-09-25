@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="goldR" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f5e6a8"/>
+      <stop offset="30%" style="stop-color:#d4af37"/>
+      <stop offset="60%" style="stop-color:#f9e076"/>
+      <stop offset="100%" style="stop-color:#b8860b"/>
+    </linearGradient>
+    <radialGradient id="diamond" cx="45%" cy="35%" r="55%">
+      <stop offset="0%" style="stop-color:#ffffff"/>
+      <stop offset="20%" style="stop-color:#e8f4fc"/>
+      <stop offset="50%" style="stop-color:#a8d4f0"/>
+      <stop offset="80%" style="stop-color:#5dade2"/>
+      <stop offset="100%" style="stop-color:#2e86c1"/>
+    </radialGradient>
+    <filter id="ringShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <g transform="translate(100, 100)" filter="url(#ringShadow)">
+    <!-- Band (ellipse for perspective) -->
+    <ellipse cx="0" cy="15" rx="52" ry="18" fill="none" stroke="url(#goldR)" stroke-width="10"/>
+    <ellipse cx="0" cy="15" rx="52" ry="18" fill="none" stroke="#f9e076" stroke-width="2" opacity="0.4"/>
+    <!-- Inner band highlight -->
+    <ellipse cx="0" cy="13" rx="46" ry="14" fill="none" stroke="#fff8dc" stroke-width="1" opacity="0.3"/>
+    <!-- Setting -->
+    <path d="M -12,-5 L 0,-35 L 12,-5 Z" fill="url(#goldR)" stroke="#b8860b" stroke-width="1"/>
+    <path d="M -8,-8 L 0,-30 L 8,-8 Z" fill="#c9a227" opacity="0.5"/>
+    <!-- Diamond -->
+    <polygon points="0,-42 -14,-18 0,-8 14,-18" fill="url(#diamond)" stroke="#85c1e9" stroke-width="0.5"/>
+    <polygon points="0,-42 -7,-22 0,-18" fill="white" opacity="0.6"/>
+    <!-- Prongs -->
+    <line x1="-10" y1="-12" x2="-12" y2="-20" stroke="#d4af37" stroke-width="2"/>
+    <line x1="10" y1="-12" x2="12" y2="-20" stroke="#d4af37" stroke-width="2"/>
+    <line x1="0" y1="-14" x2="0" y2="-22" stroke="#d4af37" stroke-width="1.5"/>
+  </g>
+</svg>

@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300" width="1000" height="300">
+  <defs>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff3c4"/>
+      <stop offset="20%" stop-color="#f5d76e"/>
+      <stop offset="50%" stop-color="#d4af37"/>
+      <stop offset="80%" stop-color="#c9a227"/>
+      <stop offset="100%" stop-color="#9a7b1a"/>
+    </linearGradient>
+    <linearGradient id="goldShine" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fff8dc" stop-opacity="0.9"/>
+      <stop offset="50%" stop-color="#d4af37" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#8b6914" stop-opacity="0.3"/>
+    </linearGradient>
+    <radialGradient id="amethyst" cx="42%" cy="35%" r="58%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="15%" stop-color="#e8d5ff"/>
+      <stop offset="45%" stop-color="#b57edc"/>
+      <stop offset="75%" stop-color="#7b2cbf"/>
+      <stop offset="100%" stop-color="#4a148c"/>
+    </radialGradient>
+    <radialGradient id="amethystGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="70%" stop-color="#9b59b6" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#9b59b6" stop-opacity="0.25"/>
+    </radialGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="gemGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Chain path — symmetric U draped on neck -->
+  <path id="chainPath"
+    d="M 40,55 C 120,200 250,240 500,230 C 750,240 880,200 960,55"
+    fill="none" stroke="url(#gold)" stroke-width="6" stroke-linecap="round"
+    filter="url(#softShadow)"/>
+  <path d="M 40,55 C 120,200 250,240 500,230 C 750,240 880,200 960,55"
+    fill="none" stroke="url(#goldShine)" stroke-width="2" opacity="0.5"/>
+
+  <!-- Chain links along path -->
+  <g fill="none" stroke="#c9a227" stroke-width="2.5" opacity="0.7">
+    <ellipse cx="80" cy="95" rx="5" ry="7" transform="rotate(-30 80 95)"/>
+    <ellipse cx="140" cy="155" rx="5" ry="7" transform="rotate(-10 140 155)"/>
+    <ellipse cx="220" cy="205" rx="5" ry="7" transform="rotate(8 220 205)"/>
+    <ellipse cx="320" cy="228" rx="5" ry="7" transform="rotate(15 320 228)"/>
+    <ellipse cx="420" cy="235" rx="5" ry="7" transform="rotate(5 420 235)"/>
+    <ellipse cx="580" cy="235" rx="5" ry="7" transform="rotate(-5 580 235)"/>
+    <ellipse cx="680" cy="228" rx="5" ry="7" transform="rotate(-15 680 228)"/>
+    <ellipse cx="780" cy="205" rx="5" ry="7" transform="rotate(-8 780 205)"/>
+    <ellipse cx="860" cy="155" rx="5" ry="7" transform="rotate(10 860 155)"/>
+    <ellipse cx="920" cy="95" rx="5" ry="7" transform="rotate(30 920 95)"/>
+  </g>
+
+  <!-- Pendant group — bottom center (anchor point ~50%, 78%) -->
+  <g transform="translate(500, 248)" filter="url(#softShadow)">
+    <!-- Bail -->
+    <path d="M -6,-42 Q 0,-58 6,-42" fill="none" stroke="url(#gold)" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="0" cy="-42" r="4" fill="#d4af37"/>
+
+    <!-- Gold teardrop frame -->
+    <path d="M 0,-38 C -22,-20 -30,10 -18,38 C -8,52 8,52 18,38 C 30,10 22,-20 0,-38 Z"
+      fill="url(#gold)" stroke="#9a7b1a" stroke-width="1.2"/>
+
+    <!-- Inner bezel -->
+    <path d="M 0,-32 C -16,-18 -22,8 -14,32 C -6,42 6,42 14,32 C 22,8 16,-18 0,-32 Z"
+      fill="#b8860b" opacity="0.4"/>
+
+    <!-- Amethyst stone -->
+    <ellipse cx="0" cy="4" rx="14" ry="20" fill="url(#amethyst)" filter="url(#gemGlow)"/>
+    <ellipse cx="-4" cy="-4" rx="5" ry="7" fill="white" opacity="0.45"/>
+
+    <!-- Soft glow behind gem -->
+    <ellipse cx="0" cy="4" rx="22" ry="28" fill="url(#amethystGlow)"/>
+  </g>
+
+  <!-- Accent stones on chain -->
+  <circle cx="250" cy="218" r="5" fill="url(#amethyst)" filter="url(#softShadow)" opacity="0.85"/>
+  <circle cx="750" cy="218" r="5" fill="url(#amethyst)" filter="url(#softShadow)" opacity="0.85"/>
+</svg>

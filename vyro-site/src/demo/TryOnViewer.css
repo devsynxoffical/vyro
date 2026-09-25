@@ -1,0 +1,367 @@
+.tryon-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  width: 100%;
+  background: #08080d;
+}
+
+.tryon-page__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  gap: 16px;
+  z-index: 10;
+}
+
+.tryon-page__back {
+  font-size: 14px;
+  font-weight: 600;
+  color: #a3a1b8;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.tryon-page__back:hover {
+  color: #fff;
+}
+
+.tryon-page__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+
+.tryon-page__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tryon-page__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #d1d0db;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.tryon-page__link:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.tryon-page__link--solid {
+  background: #a855f7;
+  border-color: #a855f7;
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.35);
+}
+
+.tryon-page__link--solid:hover {
+  background: #9333ea;
+  color: #fff;
+}
+
+.tryon-app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  background: transparent;
+  min-height: calc(100dvh - 72px);
+  padding: 0 16px 20px;
+}
+
+.tryon-stage {
+  position: relative;
+  flex: 1;
+  min-height: 58vh;
+  max-height: 70vh;
+  background: #0a0a10;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.tryon-stage__video,
+.tryon-stage__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tryon-stage__video {
+  z-index: 1;
+}
+
+.tryon-stage__video.is-mirrored {
+  transform: scaleX(-1);
+}
+
+.tryon-stage__overlay {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.tryon-stage__loader {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 2rem;
+  text-align: center;
+  background: rgba(7, 6, 11, 0.94);
+  color: var(--muted);
+}
+
+.tryon-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(0, 174, 239, 0.2);
+  border-top-color: #00aeef;
+  border-radius: 50%;
+  animation: tryonSpin 0.75s linear infinite;
+}
+
+@keyframes tryonSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tryon-stage__status {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+}
+
+.tryon-stage__status span {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.65);
+  color: #aaa;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+}
+
+.tryon-stage__status span.is-on {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.tryon-stage__actions {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  pointer-events: none;
+}
+
+.tryon-stage__actions > * {
+  pointer-events: auto;
+}
+
+.tryon-icon-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(20, 20, 28, 0.85);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.tryon-icon-btn:hover:not(:disabled) {
+  background: rgba(35, 35, 48, 0.95);
+  transform: scale(1.05);
+}
+
+.tryon-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tryon-icon-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+.tryon-btn {
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.tryon-btn--primary {
+  padding: 12px 20px;
+  border-radius: 12px;
+  background: var(--grad);
+  color: #07060b;
+}
+
+.tryon-btn--capture {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: 14px;
+  background: #00aeef;
+  color: #041018;
+  box-shadow: 0 8px 28px rgba(0, 174, 239, 0.35);
+  min-width: 170px;
+  justify-content: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tryon-btn--capture:hover:not(:disabled) {
+  transform: scale(1.03);
+  box-shadow: 0 10px 32px rgba(0, 174, 239, 0.5);
+}
+
+.tryon-btn--capture svg {
+  width: 18px;
+  height: 18px;
+}
+
+.tryon-btn--capture:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tryon-stage__hint {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+  text-align: center;
+}
+
+.tryon-picker {
+  flex-shrink: 0;
+  padding: 20px 16px 24px;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.tryon-picker__label {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text, #fff);
+  text-align: center;
+}
+
+.tryon-rail {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 4px 8px 8px;
+  scrollbar-width: thin;
+  justify-content: center;
+  max-width: 100%;
+}
+
+.tryon-tile {
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  background: rgba(20, 20, 28, 0.8);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease;
+}
+
+.tryon-tile:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.tryon-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.tryon-tile.is-selected {
+  border-color: #00aeef;
+  box-shadow: 0 0 0 2px rgba(0, 174, 239, 0.4);
+  background: rgba(0, 174, 239, 0.1);
+}
+
+.tryon-picker__meta {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--faint, #a9a6ba);
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .tryon-app {
+    max-width: 100%;
+    padding: 0;
+  }
+  .tryon-stage {
+    border-radius: 0;
+    border: none;
+    max-height: none;
+  }
+  .tryon-rail {
+    justify-content: flex-start;
+  }
+}

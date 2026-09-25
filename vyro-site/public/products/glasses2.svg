@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 140" width="400" height="140">
+  <defs>
+    <linearGradient id="frame2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#b8924a"/>
+      <stop offset="40%" stop-color="#f0dfa0"/>
+      <stop offset="100%" stop-color="#9a7030"/>
+    </linearGradient>
+    <linearGradient id="lens2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#d8ecff" stop-opacity="0.42"/>
+      <stop offset="60%" stop-color="#6a8cb0" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#2a3a50" stop-opacity="0.48"/>
+    </linearGradient>
+    <linearGradient id="shine2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="sh2">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <g filter="url(#sh2)">
+    <line x1="52" y1="70" x2="10" y2="58" stroke="url(#frame2)" stroke-width="12" stroke-linecap="round"/>
+    <line x1="348" y1="70" x2="390" y2="58" stroke="url(#frame2)" stroke-width="12" stroke-linecap="round"/>
+    <circle cx="112" cy="70" r="50" fill="url(#lens2)" stroke="url(#frame2)" stroke-width="12"/>
+    <circle cx="288" cy="70" r="50" fill="url(#lens2)" stroke="url(#frame2)" stroke-width="12"/>
+    <path d="M 162 70 C 176 52, 224 52, 238 70" fill="none" stroke="url(#frame2)" stroke-width="10" stroke-linecap="round"/>
+    <ellipse cx="95" cy="56" rx="16" ry="11" fill="url(#shine2)" opacity="0.75"/>
+    <ellipse cx="271" cy="56" rx="16" ry="11" fill="url(#shine2)" opacity="0.75"/>
+  </g>
+</svg>

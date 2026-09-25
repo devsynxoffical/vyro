@@ -1,0 +1,108 @@
+.hero {
+  position: relative;
+  padding: 7.5rem 0 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, #0a0b14 0%, #12142a 42%, #1a1230 70%, var(--surface-soft) 100%);
+  text-align: center;
+}
+
+.hero__glow {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 50% 20%, rgba(233, 28, 255, 0.28), transparent 60%),
+    radial-gradient(ellipse 45% 35% at 70% 35%, rgba(0, 217, 245, 0.18), transparent 55%);
+  pointer-events: none;
+}
+
+.hero__content {
+  position: relative;
+  z-index: 1;
+  max-width: 44rem;
+  margin-inline: auto;
+  padding-bottom: 2.5rem;
+}
+
+.hero__badge {
+  display: inline-flex;
+  margin: 0 0 1.25rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(245, 245, 248, 0.78);
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2.6rem, 6vw, 4.4rem);
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  color: #fff;
+}
+
+.hero h1 span {
+  display: block;
+  margin-top: 0.2em;
+  background: linear-gradient(115deg, #fff 10%, var(--cyan) 50%, var(--magenta-soft, #ff4fd8));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero__sub {
+  margin: 1.2rem auto 0;
+  max-width: 34rem;
+  font-size: 1.08rem;
+  line-height: 1.65;
+  color: rgba(245, 245, 248, 0.68);
+}
+
+.hero__cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.hero__stage {
+  position: relative;
+  z-index: 2;
+  margin-top: 1rem;
+  padding-bottom: 0;
+  transform: translateY(3.5rem);
+}
+
+.hero__frame {
+  border-radius: 18px 18px 0 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: none;
+  box-shadow:
+    0 40px 100px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(233, 28, 255, 0.08);
+  background: #0a0a10;
+}
+
+.hero__frame img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: top center;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding-top: 6.5rem;
+  }
+
+  .hero__stage {
+    transform: translateY(2rem);
+  }
+}

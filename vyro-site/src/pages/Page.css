@@ -1,0 +1,258 @@
+.page-prose {
+  max-width: 42rem;
+}
+
+.page-prose h2 {
+  margin: 0 0 0.85rem;
+  font-size: 1.45rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.page-prose h2 + p {
+  margin-top: 0;
+}
+
+.page-prose p {
+  margin: 0 0 1rem;
+  color: var(--muted-dark);
+  font-size: 1.02rem;
+  line-height: 1.75;
+}
+
+.page-prose > div + div,
+.page-prose > div + h2,
+.page-prose h2:not(:first-child) {
+  margin-top: 2.5rem;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.page-actions--dark {
+  margin-top: 2rem;
+}
+
+.page-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.page-card {
+  padding: 1.4rem 1.25rem;
+  border-radius: var(--radius);
+  background: #fff;
+  border: 1px solid var(--border-dark);
+}
+
+.page-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.page-card p {
+  margin: 0;
+  color: var(--muted-dark);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-top: 2.25rem;
+}
+
+.stat-card {
+  padding: 1.5rem 1.25rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-dark);
+  background: #fff;
+}
+
+.stat-card strong {
+  display: block;
+  font-size: clamp(2rem, 4vw, 2.6rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  background: linear-gradient(120deg, #6b2cff, #00a8c4);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  margin-bottom: 0.45rem;
+}
+
+.stat-card span {
+  color: var(--muted-dark);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.step-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.step-card {
+  padding: 1.25rem;
+  border-radius: var(--radius);
+  background: #fff;
+  border: 1px solid var(--border-dark);
+}
+
+.step-card span {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 0.85rem;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(120deg, var(--magenta), var(--blue));
+}
+
+.step-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.step-card p {
+  margin: 0;
+  color: var(--muted-dark);
+  font-size: 0.9rem;
+}
+
+.point-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.point-card {
+  padding: 1.1rem 1.2rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+.demo-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem 3rem;
+  align-items: start;
+}
+
+.demo-list {
+  margin: 1.5rem 0 1.5rem;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.demo-list li {
+  position: relative;
+  padding-left: 1.25rem;
+  color: var(--muted-dark);
+}
+
+.demo-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.45rem;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: linear-gradient(120deg, var(--magenta), var(--cyan));
+}
+
+.demo-form-card {
+  padding: 1.4rem;
+  border-radius: 18px;
+  background: #fff;
+  border: 1px solid var(--border-dark);
+  box-shadow: 0 20px 50px rgba(18, 19, 26, 0.06);
+}
+
+.demo-form-card form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.demo-form-card label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.demo-form-card span {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8a8f9c;
+}
+
+.demo-form-card input,
+.demo-form-card textarea {
+  width: 100%;
+  padding: 0.8rem 0.95rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-dark);
+  background: #fafafc;
+  color: var(--text-dark);
+  outline: none;
+  resize: vertical;
+}
+
+.demo-form-card input:focus,
+.demo-form-card textarea:focus {
+  border-color: #6b2cff;
+  box-shadow: 0 0 0 3px rgba(107, 44, 255, 0.12);
+}
+
+.demo-note {
+  margin: 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #8a8f9c;
+}
+
+.demo-note a {
+  color: #6b2cff;
+  font-weight: 600;
+}
+
+@media (max-width: 960px) {
+  .page-cards,
+  .stat-grid,
+  .step-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .page-cards,
+  .stat-grid,
+  .step-grid,
+  .point-grid,
+  .demo-layout {
+    grid-template-columns: 1fr;
+  }
+}

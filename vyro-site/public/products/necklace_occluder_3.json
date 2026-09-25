@@ -1,0 +1,37 @@
+{
+    "name" : "necklace_occluder",
+    "nearZPos": 0.01,
+    "farZPos": -0.003,
+    "exposure": 0,
+    "horiOrien": 0,
+    "vertOrien": 0,
+    "env_map_intensity": [],
+    "left_point" : [
+        -0.62952,
+        -0.11308,
+        0.01224,
+        1.0
+    ],
+    "right_point" : [
+        0.62952,
+        -0.11308,
+        0.01224,
+        1.0
+    ],
+    "scale" : [
+        1.0,
+        1.0,
+        1.0
+    ],
+    "rotation" : [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "base_color" : [
+        1.0,
+        1.0,
+        1.0
+    ],
+    "sparkle_points" : []
+}
