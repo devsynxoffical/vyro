@@ -86,15 +86,20 @@ const GLASSES_TUNING: Record<
 const DEFAULT_GLASSES_TUNING = { widthFactor: 1.0, anchorX: 0.5, anchorY: 0.405 };
 
 const WATCH_TUNING = {
-  wristTaper: 0.73,
-  /** Case (incl. lugs) width relative to the visible wrist breadth */
-  caseToWrist: 0.78,
-  /**
-   * How far below the wrist joint the case sits, relative to wrist breadth.
-   * The wrist landmark already lands slightly down the forearm on a fist, so
-   * the case goes right on it.
-   */
-  forearmOffset: 0,
+  /** Wrist width relative to the knuckle span (index MCP to pinky MCP) */
+  wristToKnuckles: 0.82,
+  /** Wrist width relative to the palm length (wrist to middle MCP) */
+  wristToPalm: 0.6,
+  /** Case (incl. lugs) width relative to the wrist width */
+  caseToWrist: 0.92,
+  /** How far below the wrist joint the case sits, relative to wrist width */
+  forearmOffset: 0.08,
+  /** Visible strap band across the wrist, relative to wrist width */
+  strapBand: 1.25,
+  /** Fraction of the band that is fully opaque before fading over the edge */
+  strapSolid: 0.72,
+  /** Hysteresis before flipping which way 12 o'clock points */
+  flipMargin: 0.35,
 };
 
 const NECKLACE_TUNING = {
@@ -152,8 +157,13 @@ export class TryOnEngine {
   private watchCenter = new SmoothPoint(0.16);
   private watchScale = new SmoothValue(0.18);
   private watchRotation = new SmoothAngle(0.14);
+  /** 0 or PI: which perpendicular of the forearm 12 o'clock currently points to */
+  private watchFlip: number | null = null;
+  private watchCanvas: HTMLCanvasElement | null = null;
   private watchArmDir = new SmoothPoint(0.2);
 
+  /** ?debug in the URL draws landmarks and the arm axis over the video. */
+  private debug = typeof location !== 'undefined' && /[?&]debug/.test(location.search);
   private lastFrameTime = 0;
   private frameCount = 0;
   private lastTracking = false;
@@ -429,6 +439,7 @@ export class TryOnEngine {
 
   private resetWatchArmState() {
     this.watchArmDir.reset();
+    this.watchFlip = null;
   }
 
   async setProduct(product: Product) {
@@ -858,7 +869,7 @@ export class TryOnEngine {
     const indexSide = indexPt.x * perpX + indexPt.y * perpY;
     const pinkySide = pinkyPt.x * perpX + pinkyPt.y * perpY;
     const projectedSpan = Math.abs(indexSide - pinkySide);
-    return Math.max(knuckleSpan, projectedSpan) * WATCH_TUNING.wristTaper;
+    return Math.max(knuckleSpan, projectedSpan);
   }
 
   /**
@@ -941,6 +952,39 @@ export class TryOnEngine {
     const smoothArm = this.watchArmDir.update(target.x, target.y);
     const armAxis = this.normalizeDir(smoothArm.x, smoothArm.y);
 
+    if (this.debug && this.overlayCtx) {
+      const c = this.overlayCtx;
+      c.save();
+      c.lineWidth = 3;
+      for (const lm of bestHand) {
+        const pt = this.toScreen(lm.x, lm.y, w, h);
+        c.fillStyle = '#00e5ff';
+        c.fillRect(pt.x - 3, pt.y - 3, 6, 6);
+      }
+      if (pose) {
+        for (const i of [11, 12, 13, 14, 15, 16]) {
+          const pt = this.toScreen(pose[i].x, pose[i].y, w, h);
+          c.fillStyle = (pose[i].visibility ?? 1) >= POSE_MIN_VISIBILITY ? '#ffeb3b' : '#ff5722';
+          c.beginPath();
+          c.arc(pt.x, pt.y, 7, 0, Math.PI * 2);
+          c.fill();
+        }
+      }
+      c.strokeStyle = '#ff00ff';
+      c.beginPath();
+      c.moveTo(wristPt.x, wristPt.y);
+      c.lineTo(wristPt.x + armAxis.x * 120, wristPt.y + armAxis.y * 120);
+      c.stroke();
+      c.fillStyle = '#fff';
+      c.font = '16px monospace';
+      c.fillText(
+        `pose:${this.poseLandmarker ? 'on' : 'off'} axis:${target === smoothArm ? '' : ''}${armAxis.x.toFixed(2)},${armAxis.y.toFixed(2)} knuckles:${knuckleSpan.toFixed(0)}`,
+        12,
+        h - 16,
+      );
+      c.restore();
+    }
+
     const palmLen = Math.hypot(
       (middleMcp.x - wrist.x) * w,
       (middleMcp.y - wrist.y) * h,
@@ -949,29 +993,108 @@ export class TryOnEngine {
     // Knuckle span foreshortens on a fist, palm length on a flat hand facing
     // the camera edge-on; the larger of the two is the better wrist estimate.
     const wristBreadth = Math.max(
-      this.estimateWristBreadth(indexPt, pinkyPt, armAxis),
-      palmLen * 0.6,
+      this.estimateWristBreadth(indexPt, pinkyPt, armAxis) * WATCH_TUNING.wristToKnuckles,
+      palmLen * WATCH_TUNING.wristToPalm,
     );
     const watchWidth =
       (wristBreadth * WATCH_TUNING.caseToWrist) / this.watchGeometry.caseWidthFrac;
     const watchX = wristPt.x - armAxis.x * wristBreadth * WATCH_TUNING.forearmOffset;
     const watchY = wristPt.y - armAxis.y * wristBreadth * WATCH_TUNING.forearmOffset;
 
-    // 12 o'clock towards the hand.
-    const angle = Math.atan2(armAxis.y, armAxis.x) + Math.PI / 2;
+    // The strap wraps around the wrist, so the 12-6 axis is perpendicular to
+    // the forearm. Two perpendiculars are possible; prefer the one that puts
+    // 12 o'clock upwards on screen (how people read a watch), and near a
+    // vertical forearm, where neither is "up", put the crown towards the hand.
+    // Hysteresis stops it flipping as the arm passes through vertical.
+    const crownToHand = Math.atan2(armAxis.y, armAxis.x);
+    const upness = (flip: number) => Math.cos(crownToHand + flip);
+    if (this.watchFlip === null) {
+      this.watchFlip = upness(Math.PI) > upness(0) + WATCH_TUNING.flipMargin ? Math.PI : 0;
+    } else {
+      const other = this.watchFlip === 0 ? Math.PI : 0;
+      if (upness(other) > upness(this.watchFlip) + WATCH_TUNING.flipMargin) {
+        this.watchFlip = other;
+      }
+    }
+    const angle = crownToHand + this.watchFlip;
+
     const smoothPos = this.watchCenter.update(watchX, watchY);
     const smoothScale = this.watchScale.update(watchWidth);
     const rotation = this.watchRotation.update(angle);
+    const smoothBreadth = smoothScale * this.watchGeometry.caseWidthFrac / WATCH_TUNING.caseToWrist;
 
-    this.drawImageAt(
+    this.drawWatchWrapped(
       this.watchAsset,
       smoothPos.x,
       smoothPos.y,
       smoothScale,
       rotation,
-      0.5,
       this.watchGeometry.caseCenterY,
+      smoothBreadth * WATCH_TUNING.strapBand,
     );
+  }
+
+  /**
+   * Draws the flat product shot as if wrapped around a cylinder of the given
+   * band width: the strap fades out and darkens where it curves over the
+   * wrist's edges instead of lying flat on top of the arm.
+   */
+  private drawWatchWrapped(
+    asset: LoadedImage,
+    x: number,
+    y: number,
+    width: number,
+    angle: number,
+    anchorY: number,
+    band: number,
+  ) {
+    if (!this.overlayCtx || width < 2) return;
+    const height = width / asset.aspect;
+    const cw = Math.ceil(width);
+    const ch = Math.ceil(height);
+    const off = (this.watchCanvas ??= document.createElement('canvas'));
+    if (off.width !== cw || off.height !== ch) {
+      off.width = cw;
+      off.height = ch;
+    }
+    const octx = off.getContext('2d');
+    if (!octx) return;
+
+    octx.globalCompositeOperation = 'source-over';
+    octx.clearRect(0, 0, cw, ch);
+    octx.drawImage(asset.image, 0, 0, width, height);
+
+    // Strap runs along the image's y axis; the wrist band is centred on the case.
+    const centerY = anchorY * height;
+    const half = band / 2;
+    const solid = half * WATCH_TUNING.strapSolid;
+    const stop = (v: number) => Math.min(1, Math.max(0, v / height));
+
+    const alpha = octx.createLinearGradient(0, 0, 0, height);
+    alpha.addColorStop(stop(centerY - half), 'rgba(0,0,0,0)');
+    alpha.addColorStop(stop(centerY - solid), 'rgba(0,0,0,1)');
+    alpha.addColorStop(stop(centerY + solid), 'rgba(0,0,0,1)');
+    alpha.addColorStop(stop(centerY + half), 'rgba(0,0,0,0)');
+    octx.globalCompositeOperation = 'destination-in';
+    octx.fillStyle = alpha;
+    octx.fillRect(0, 0, cw, ch);
+
+    // Shade the strap as it turns away from the light over the edges.
+    const shade = octx.createLinearGradient(0, 0, 0, height);
+    shade.addColorStop(stop(centerY - half), 'rgba(0,0,0,0.55)');
+    shade.addColorStop(stop(centerY - solid * 0.6), 'rgba(0,0,0,0)');
+    shade.addColorStop(stop(centerY + solid * 0.6), 'rgba(0,0,0,0)');
+    shade.addColorStop(stop(centerY + half), 'rgba(0,0,0,0.55)');
+    octx.globalCompositeOperation = 'source-atop';
+    octx.fillStyle = shade;
+    octx.fillRect(0, 0, cw, ch);
+    octx.globalCompositeOperation = 'source-over';
+
+    this.overlayCtx.save();
+    this.overlayCtx.translate(x, y);
+    this.overlayCtx.rotate(angle);
+    this.overlayCtx.drawImage(off, -width / 2, -centerY);
+    this.overlayCtx.restore();
   }
 
   destroy() {
