@@ -10,13 +10,11 @@ import { PRODUCTS, type Product, type ProductType } from '../types';
 import { estimateFingerSize } from './fingerSizing';
 import { SmoothAngle, SmoothPoint, SmoothValue } from './smoothing';
 import {
-  DEFAULT_ALPHA_BOUNDS,
   DEFAULT_WATCH_GEOMETRY,
-  measureAlphaBounds,
   measureWatchGeometry,
-  type AlphaBounds,
   type WatchGeometry,
 } from './watchGeometry';
+import { NECKLACE_STYLES, renderNecklace, type NeckFrame } from './necklaceRenderer';
 
 type Vision = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 type Pt = { x: number; y: number };
@@ -139,22 +137,16 @@ const WATCH_TUNING = {
 };
 
 const NECKLACE_TUNING = {
-  /** Chain spread at the neck relative to the shoulder span (pose) */
-  chainToShoulders: 0.44,
-  /** Neck base sits this far above the shoulder midpoint, relative to span */
-  neckLift: 0.15,
-  /** Fallbacks when only the face is tracked, relative to jaw width */
-  chainToJaw: 1.4,
-  neckDropFromChin: 0.5,
-  /**
-   * Seen from the front the chest slopes away, so a necklace's drop is
-   * foreshortened relative to the flat product shot. Per product because a
-   * short strand hugs the neck while a pendant chain hangs lower.
-   */
-  dropScale: { 'necklace-2': 0.7 } as Record<string, number>,
-  defaultDropScale: 0.8,
-  /** Top fraction of the chain that fades out as it passes behind the neck */
-  neckFade: 0.22,
+  /** Average face width (cheekbone to cheekbone) used to scale the scene */
+  faceWidthCm: 14,
+  /** Neck radius relative to face width */
+  neckRadiusToFace: 0.4,
+  /** Neck base below the chin, relative to face width */
+  neckBaseFromChin: 0.5,
+  /** Fallbacks from the pose skeleton only */
+  shoulderSpanCm: 38,
+  neckRadiusToShoulders: 0.14,
+  neckLiftFromShoulders: 0.14,
 };
 
 export class TryOnEngine {
@@ -172,14 +164,12 @@ export class TryOnEngine {
   private modelLoadingNotified = false;
 
   private ringAsset: LoadedImage | null = null;
-  private necklaceAsset: LoadedImage | null = null;
+  private pendantAsset: LoadedImage | null = null;
   private glassesAsset: LoadedImage | null = null;
   private watchAsset: LoadedImage | null = null;
   private watchGeometry: WatchGeometry = DEFAULT_WATCH_GEOMETRY;
   private watchGeometryCache = new Map<string, WatchGeometry>();
-  private necklaceBounds: AlphaBounds = DEFAULT_ALPHA_BOUNDS;
-  private necklaceCanvas: HTMLCanvasElement | null = null;
-  private necklaceBoundsCache = new Map<string, AlphaBounds>();
+  private neckRadius = new SmoothValue(0.25, { max: 0.7, scale: 0.3, dead: 0.02 });
   private imageCache = new Map<string, LoadedImage>();
 
   private animationId = 0;
@@ -491,6 +481,7 @@ export class TryOnEngine {
     this.neckCenter.reset();
     this.neckScale.reset();
     this.neckRotation.reset();
+    this.neckRadius.reset();
     this.glassesCenter.reset();
     this.glassesScale.reset();
     this.glassesRotation.reset();
@@ -519,13 +510,9 @@ export class TryOnEngine {
     for (const kind of MODELS_FOR[product.type]) void this.ensureModel(kind);
     switch (product.type) {
       case 'necklace': {
-        let bounds = this.necklaceBoundsCache.get(product.image);
-        if (!bounds) {
-          bounds = measureAlphaBounds(loaded.image);
-          this.necklaceBoundsCache.set(product.image, bounds);
-        }
-        this.necklaceBounds = bounds;
-        this.necklaceAsset = loaded;
+        const pendant = NECKLACE_STYLES[product.id]?.pendant;
+        this.pendantAsset = pendant ? await this.getImage(pendant.src) : null;
+        if (this.activeProduct !== product) return;
         break;
       }
       case 'glasses':
@@ -625,15 +612,16 @@ export class TryOnEngine {
       case 'necklace': {
         const pose = this.detectPose(ts);
         const face = this.faceLandmarker?.detectForVideo(this.video, ts);
-        const target = this.necklaceTarget(pose, face?.faceLandmarks[0], vw, vh);
+        const target = this.neckFrame(pose, face?.faceLandmarks[0], vw, vh);
         if (target) {
           detected = true;
           if (fresh) {
             this.neckCenter.reset();
             this.neckScale.reset();
             this.neckRotation.reset();
+            this.neckRadius.reset();
           }
-          if (this.necklaceAsset) this.drawNecklace(target);
+          this.drawNecklace(target);
         }
         break;
       }
@@ -731,128 +719,99 @@ export class TryOnEngine {
   }
 
   /**
-   * Where the necklace hangs: the neck base (top-centre of the chain), the
-   * chain spread there, and the shoulder tilt. Pose shoulders give the real
-   * chest position; the face alone is a rougher fallback.
+   * Neck axis at the collar line, neck radius and scene scale (px/cm). The
+   * face gives the most reliable scale and neck width; pose shoulders give
+   * the collar height and tilt; either alone still works.
    */
-  private necklaceTarget(
+  private neckFrame(
     pose: NormalizedLandmark[] | null,
     face: NormalizedLandmark[] | undefined,
     w: number,
     h: number,
-  ): { center: Pt; width: number; angle: number } | null {
+  ): NeckFrame | null {
+    const T = NECKLACE_TUNING;
+    let shoulders: { mid: Pt; span: number; angle: number } | null = null;
     const ls = pose?.[POSE.leftShoulder];
     const rs = pose?.[POSE.rightShoulder];
     if (this.visible(ls) && this.visible(rs)) {
       const a = this.toScreen(ls.x, ls.y, w, h);
       const b = this.toScreen(rs.x, rs.y, w, h);
-      // Order by screen x so the angle is near 0 whether or not we mirror.
       const [l, r] = a.x <= b.x ? [a, b] : [b, a];
       const span = Math.hypot(r.x - l.x, r.y - l.y);
       if (span > w * 0.05) {
-        const angle = Math.atan2(r.y - l.y, r.x - l.x);
-        // "Up" relative to the shoulder line, so the neck base follows a tilt.
-        const upX = Math.sin(angle);
-        const upY = -Math.cos(angle);
-        const lift = span * NECKLACE_TUNING.neckLift;
-        return {
-          center: {
-            x: (l.x + r.x) / 2 + upX * lift,
-            y: (l.y + r.y) / 2 + upY * lift,
-          },
-          width: span * NECKLACE_TUNING.chainToShoulders,
-          angle,
+        shoulders = {
+          mid: { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2 },
+          span,
+          angle: Math.atan2(r.y - l.y, r.x - l.x),
         };
       }
     }
 
+    let faceInfo: { chin: Pt; width: number; angle: number } | null = null;
     if (face) {
-      const a = this.toScreen(face[172].x, face[172].y, w, h);
-      const b = this.toScreen(face[397].x, face[397].y, w, h);
-      const chin = this.toScreen(face[152].x, face[152].y, w, h);
+      const a = this.toScreen(face[234].x, face[234].y, w, h);
+      const b = this.toScreen(face[454].x, face[454].y, w, h);
       const [l, r] = a.x <= b.x ? [a, b] : [b, a];
-      const jaw = Math.hypot(r.x - l.x, r.y - l.y);
-      const angle = Math.atan2(r.y - l.y, r.x - l.x);
-      const downX = -Math.sin(angle);
-      const downY = Math.cos(angle);
-      const drop = jaw * NECKLACE_TUNING.neckDropFromChin;
-      return {
-        center: { x: chin.x + downX * drop, y: chin.y + downY * drop },
-        width: jaw * NECKLACE_TUNING.chainToJaw,
-        angle,
-      };
+      const width = Math.hypot(r.x - l.x, r.y - l.y);
+      if (width > w * 0.03) {
+        faceInfo = {
+          chin: this.toScreen(face[152].x, face[152].y, w, h),
+          width,
+          angle: Math.atan2(r.y - l.y, r.x - l.x),
+        };
+      }
     }
+    if (!shoulders && !faceInfo) return null;
 
-    return null;
+    const angle = shoulders?.angle ?? faceInfo!.angle;
+    const down = { x: -Math.sin(angle), y: Math.cos(angle) };
+
+    let pxPerCm: number;
+    let radiusPx: number;
+    let x: number;
+    let y: number;
+    if (faceInfo) {
+      pxPerCm = faceInfo.width / T.faceWidthCm;
+      radiusPx = faceInfo.width * T.neckRadiusToFace;
+      const drop = faceInfo.width * T.neckBaseFromChin;
+      x = faceInfo.chin.x + down.x * drop;
+      y = faceInfo.chin.y + down.y * drop;
+      if (shoulders) {
+        // Shoulders know where the collar line is; average the two estimates.
+        const lift = shoulders.span * T.neckLiftFromShoulders;
+        const sy = shoulders.mid.y - down.y * lift;
+        const sx = shoulders.mid.x - down.x * lift;
+        x = (x + sx) / 2;
+        y = (y + sy) / 2;
+      }
+    } else {
+      const sh = shoulders!;
+      pxPerCm = sh.span / T.shoulderSpanCm;
+      radiusPx = sh.span * T.neckRadiusToShoulders;
+      const lift = sh.span * T.neckLiftFromShoulders;
+      x = sh.mid.x - down.x * lift;
+      y = sh.mid.y - down.y * lift;
+    }
+    return { x, y, radiusPx, pxPerCm, angle };
   }
 
-  private drawNecklace(target: { center: Pt; width: number; angle: number }) {
-    if (!this.necklaceAsset || !this.activeProduct) return;
-    const b = this.necklaceBounds;
-    const opaqueWidth = Math.max(0.05, b.right - b.left);
-    const imageWidth = target.width / opaqueWidth;
-
-    const pos = this.neckCenter.update(target.center.x, target.center.y);
-    const width = this.neckScale.update(imageWidth);
-    const angle = this.neckRotation.update(target.angle);
-    const dropScale =
-      NECKLACE_TUNING.dropScale[this.activeProduct.id] ?? NECKLACE_TUNING.defaultDropScale;
-
-    const asset = this.necklaceAsset;
-    const anchorX = (b.left + b.right) / 2;
-    const draw = () =>
-      this.paintNecklace(asset, pos.x, pos.y, width, angle, anchorX, b.top, dropScale);
+  private drawNecklace(target: NeckFrame) {
+    if (!this.overlayCtx || !this.activeProduct) return;
+    const style = NECKLACE_STYLES[this.activeProduct.id];
+    if (!style) return;
+    const pos = this.neckCenter.update(target.x, target.y);
+    const frame: NeckFrame = {
+      x: pos.x,
+      y: pos.y,
+      radiusPx: this.neckRadius.update(target.radiusPx),
+      pxPerCm: this.neckScale.update(target.pxPerCm),
+      angle: this.neckRotation.update(target.angle),
+    };
+    const ctx = this.overlayCtx;
+    const pendant = this.pendantAsset;
+    const draw = () => renderNecklace(ctx, style, frame, pendant);
     this.lastDraw = draw;
     draw();
-  }
-
-  /**
-   * Draws the chain anchored at its top-centre (the neck base) with the top
-   * ends fading out, as a real chain disappears behind the sides of the neck
-   * instead of ending on the skin; dropScale foreshortens the hang.
-   */
-  private paintNecklace(
-    asset: LoadedImage,
-    x: number,
-    y: number,
-    width: number,
-    angle: number,
-    anchorX: number,
-    anchorY: number,
-    dropScale: number,
-  ) {
-    if (!this.overlayCtx || width < 2) return;
-    const height = width / asset.aspect;
-    const cw = Math.ceil(width);
-    const ch = Math.ceil(height);
-    const off = (this.necklaceCanvas ??= document.createElement('canvas'));
-    if (off.width !== cw || off.height !== ch) {
-      off.width = cw;
-      off.height = ch;
-    }
-    const octx = off.getContext('2d');
-    if (!octx) return;
-
-    octx.globalCompositeOperation = 'source-over';
-    octx.clearRect(0, 0, cw, ch);
-    octx.drawImage(asset.image, 0, 0, width, height);
-
-    const top = anchorY * height;
-    const fadeEnd = top + (height - top) * NECKLACE_TUNING.neckFade;
-    const alpha = octx.createLinearGradient(0, top, 0, fadeEnd);
-    alpha.addColorStop(0, 'rgba(0,0,0,0)');
-    alpha.addColorStop(1, 'rgba(0,0,0,1)');
-    octx.globalCompositeOperation = 'destination-in';
-    octx.fillStyle = alpha;
-    octx.fillRect(0, 0, cw, ch);
-    octx.globalCompositeOperation = 'source-over';
-
-    this.overlayCtx.save();
-    this.overlayCtx.translate(x, y);
-    this.overlayCtx.rotate(angle);
-    this.overlayCtx.scale(1, dropScale);
-    this.overlayCtx.drawImage(off, -width * anchorX, -top);
-    this.overlayCtx.restore();
   }
 
   private drawRing(

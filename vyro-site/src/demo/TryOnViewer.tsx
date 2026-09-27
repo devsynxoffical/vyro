@@ -27,7 +27,7 @@ function hintFor(type: ProductType, facing: CameraFacing): string {
     case 'glasses':
       return back ? 'Point the back camera at your face' : 'Look at the camera';
     case 'necklace':
-      return back ? 'Point the camera at your face and neck' : 'Keep your face in frame';
+      return back ? 'Point the camera at your face and shoulders' : 'Face the camera, shoulders in view';
     case 'watch':
       return back ? 'Point the camera at your wrist' : 'Show your wrist to the camera';
     case 'ring':
