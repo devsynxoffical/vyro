@@ -227,8 +227,10 @@ export class TryOnEngine {
     await Promise.all([
       this.initCamera(),
       this.initMediaPipe(),
-      this.preloadAllProducts(),
     ]);
+
+    // Preload remaining product assets in the background without blocking camera startup
+    void this.preloadAllProducts();
 
     this.callbacks.onStatus('ready');
   }
