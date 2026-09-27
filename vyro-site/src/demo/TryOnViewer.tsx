@@ -45,6 +45,7 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
   const [status, setStatus] = useState<EngineStatus>('idle');
   const [statusMessage, setStatusMessage] = useState('');
   const [tracking, setTracking] = useState(false);
+  const [modelLoading, setModelLoading] = useState(false);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
   const [switchingCamera, setSwitchingCamera] = useState(false);
 
@@ -76,13 +77,16 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
       onTracking: (value) => {
         if (isCurrent()) setTracking(value);
       },
+      onModelLoading: (value) => {
+        if (isCurrent()) setModelLoading(value);
+      },
     });
     engineRef.current = engine;
 
     try {
       await engine.init(
         { videoElement, overlayCanvas },
-        { facingMode: cameraFacingRef.current },
+        { facingMode: cameraFacingRef.current, initialProductType: productRef.current.type },
       );
       if (!isCurrent()) return;
       engine.start();
@@ -199,7 +203,7 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
         {ready && (
           <div className="tryon-stage__status" aria-live="polite">
             <span className={tracking ? 'is-on' : ''}>
-              {tracking ? 'Tracking active' : 'Finding target…'}
+              {tracking ? 'Tracking active' : modelLoading ? 'Loading tracker…' : 'Finding target…'}
             </span>
           </div>
         )}

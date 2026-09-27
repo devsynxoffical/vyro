@@ -6,7 +6,7 @@ import {
   type Landmark,
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
-import { PRODUCTS, type Product } from '../types';
+import { PRODUCTS, type Product, type ProductType } from '../types';
 import { estimateFingerSize } from './fingerSizing';
 import { SmoothAngle, SmoothPoint, SmoothValue } from './smoothing';
 import {
@@ -51,13 +51,25 @@ export type CameraFacing = 'user' | 'environment';
 
 export interface EngineInitOptions {
   facingMode?: CameraFacing;
+  /** Lets the tracker for the first product download alongside the camera prompt */
+  initialProductType?: ProductType;
 }
 
 export interface EngineCallbacks {
   onStatus: (status: EngineStatus, message?: string) => void;
   onFps?: (fps: number) => void;
   onTracking?: (tracking: boolean) => void;
+  /** True while the tracker the current product needs is still downloading */
+  onModelLoading?: (loading: boolean) => void;
 }
+
+type ModelKind = 'hand' | 'face' | 'pose';
+const MODELS_FOR: Record<ProductType, ModelKind[]> = {
+  glasses: ['face'],
+  necklace: ['pose', 'face'],
+  ring: ['hand'],
+  watch: ['hand', 'pose'],
+};
 
 export interface EngineElements {
   videoElement: HTMLVideoElement;
@@ -154,7 +166,8 @@ export class TryOnEngine {
   private handLandmarker: HandLandmarker | null = null;
   private faceLandmarker: FaceLandmarker | null = null;
   private poseLandmarker: PoseLandmarker | null = null;
-  private poseLoading: Promise<void> | null = null;
+  private modelLoading: Partial<Record<ModelKind, Promise<void>>> = {};
+  private modelLoadingNotified = false;
 
   private ringAsset: LoadedImage | null = null;
   private necklaceAsset: LoadedImage | null = null;
@@ -222,15 +235,17 @@ export class TryOnEngine {
       throw new Error('Could not get overlay 2D context');
     }
 
-    this.callbacks.onStatus('loading', 'Starting camera & tracking...');
+    this.callbacks.onStatus('loading', 'Starting camera...');
 
-    await Promise.all([
-      this.initCamera(),
-      this.initMediaPipe(),
-    ]);
+    // Only the tracker the first product needs gates start-up; it downloads
+    // while the camera permission prompt is up. The others load on demand
+    // and are also warmed in the background once the camera is running.
+    const first = options.initialProductType ?? 'watch';
+    const firstModels = Promise.all(MODELS_FOR[first].map((k) => this.ensureModel(k)));
+    await Promise.all([this.initCamera(), firstModels]);
 
-    // Preload remaining product assets in the background without blocking camera startup
     void this.preloadAllProducts();
+    for (const kind of ['hand', 'face', 'pose'] as ModelKind[]) void this.ensureModel(kind);
 
     this.callbacks.onStatus('ready');
   }
@@ -356,79 +371,81 @@ export class TryOnEngine {
     }
   }
 
-  /**
-   * Body pose (shoulders, elbows, wrists) is only needed for watches and
-   * necklaces, so it loads on first use; those products fall back to hand /
-   * face-only placement until it is ready.
-   */
-  private ensurePose(): Promise<void> {
-    if (this.poseLandmarker || this.destroyed) return Promise.resolve();
-    if (this.poseLoading) return this.poseLoading;
-    this.poseLoading = (async () => {
-      const vision = this.vision ?? (await FilesetResolver.forVisionTasks(WASM_CDN));
-      const load = (delegate: 'GPU' | 'CPU') =>
-        PoseLandmarker.createFromOptions(vision, {
+  private async getVision(): Promise<Vision> {
+    if (!this.vision) this.vision = await FilesetResolver.forVisionTasks(WASM_CDN);
+    return this.vision;
+  }
+
+  private hasModel(kind: ModelKind): boolean {
+    return kind === 'hand'
+      ? !!this.handLandmarker
+      : kind === 'face'
+        ? !!this.faceLandmarker
+        : !!this.poseLandmarker;
+  }
+
+  /** Loads one tracker on demand (GPU, falling back to CPU); idempotent. */
+  private ensureModel(kind: ModelKind): Promise<void> {
+    if (this.hasModel(kind) || this.destroyed) return Promise.resolve();
+    const pending = this.modelLoading[kind];
+    if (pending) return pending;
+    const task = (async () => {
+      const vision = await this.getVision();
+      const create = (delegate: 'GPU' | 'CPU') => {
+        if (kind === 'hand') {
+          return HandLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: HAND_MODEL, delegate },
+            runningMode: 'VIDEO',
+            numHands: 2,
+          });
+        }
+        if (kind === 'face') {
+          return FaceLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: FACE_MODEL, delegate },
+            runningMode: 'VIDEO',
+            numFaces: 1,
+          });
+        }
+        return PoseLandmarker.createFromOptions(vision, {
           baseOptions: { modelAssetPath: POSE_MODEL, delegate },
           runningMode: 'VIDEO',
           numPoses: 1,
         });
-      let pose: PoseLandmarker;
+      };
+      let model: HandLandmarker | FaceLandmarker | PoseLandmarker;
       try {
-        pose = await load('GPU');
+        model = await create('GPU');
       } catch {
-        pose = await load('CPU');
+        model = await create('CPU');
       }
       if (this.destroyed) {
-        pose.close();
+        model.close();
         return;
       }
-      this.poseLandmarker = pose;
-    })().catch(() => {
-      // Pose is an enhancement; keep running on hand / face tracking alone.
-      this.poseLoading = null;
+      if (model instanceof HandLandmarker) this.handLandmarker = model;
+      else if (model instanceof FaceLandmarker) this.faceLandmarker = model;
+      else this.poseLandmarker = model;
+    })().finally(() => {
+      delete this.modelLoading[kind];
     });
-    return this.poseLoading;
+    this.modelLoading[kind] = task;
+    // Pose is an enhancement; hand/face failures surface through the first
+    // product's await in init(), later ones just keep the product untracked.
+    return kind === 'pose' ? task.catch(() => {}) : task;
   }
 
-  private async initMediaPipe() {
-    const vision = await FilesetResolver.forVisionTasks(WASM_CDN);
-    this.vision = vision;
-
-    const loadFace = (delegate: 'GPU' | 'CPU') =>
-      FaceLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: FACE_MODEL, delegate },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-      });
-
-    const loadHand = (delegate: 'GPU' | 'CPU') =>
-      HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: HAND_MODEL, delegate },
-        runningMode: 'VIDEO',
-        numHands: 2,
-      });
-
-    try {
-      [this.faceLandmarker, this.handLandmarker] = await Promise.all([
-        loadFace('GPU'),
-        loadHand('GPU'),
-      ]);
-    } catch {
-      [this.faceLandmarker, this.handLandmarker] = await Promise.all([
-        loadFace('CPU'),
-        loadHand('CPU'),
-      ]);
+  /** Makes sure the product's trackers exist; reports while they download. */
+  private modelsReady(type: ProductType): boolean {
+    const required = MODELS_FOR[type].filter((k) => k !== 'pose');
+    const ready = required.every((k) => this.hasModel(k));
+    if (!ready) for (const k of required) void this.ensureModel(k).catch(() => {});
+    if (!ready !== this.modelLoadingNotified) {
+      this.modelLoadingNotified = !ready;
+      this.callbacks.onModelLoading?.(!ready);
     }
-
-    if (this.destroyed) {
-      this.faceLandmarker?.close();
-      this.handLandmarker?.close();
-      this.faceLandmarker = null;
-      this.handLandmarker = null;
-    }
+    return ready;
   }
 
-  /** Pose changes slowly relative to the hand, so it runs every other frame. */
   private detectPose(ts: number): NormalizedLandmark[] | null {
     if (!this.poseLandmarker || !this.video) return null;
     if (this.poseFrame++ % 2 === 0) {
@@ -496,9 +513,7 @@ export class TryOnEngine {
     const loaded = await this.getImage(product.image);
     // A newer selection arrived while this image was loading.
     if (this.activeProduct !== product) return;
-    if (product.type === 'watch' || product.type === 'necklace') {
-      void this.ensurePose();
-    }
+    for (const kind of MODELS_FOR[product.type]) void this.ensureModel(kind);
     switch (product.type) {
       case 'necklace': {
         let bounds = this.necklaceBoundsCache.get(product.image);
@@ -582,6 +597,7 @@ export class TryOnEngine {
 
     // No frame yet (e.g. mid camera switch); detectForVideo would throw.
     if (!product || this.video.readyState < 2) return;
+    if (!this.modelsReady(product.type)) return;
 
     const ts = this.nextTimestamp();
     let detected = false;
