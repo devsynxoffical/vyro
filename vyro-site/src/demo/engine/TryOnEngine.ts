@@ -113,8 +113,11 @@ const WATCH_TUNING = {
   wristToPalm: 0.6,
   /** Case (incl. lugs) width relative to the wrist width */
   caseToWrist: 0.92,
-  /** How far below the wrist joint the case sits, relative to wrist width */
-  forearmOffset: 0.08,
+  /**
+   * How far below the wrist crease the case centre sits, relative to wrist
+   * width (~1.8 cm on a 6 cm wrist), for an open hand.
+   */
+  forearmOffset: 0.3,
   /** Visible strap band across the wrist, relative to the case width */
   strapBand: 1.75,
   /** Fraction of the band that is fully opaque before fading over the edge */
@@ -125,12 +128,19 @@ const WATCH_TUNING = {
 
 const NECKLACE_TUNING = {
   /** Chain spread at the neck relative to the shoulder span (pose) */
-  chainToShoulders: 0.32,
+  chainToShoulders: 0.4,
   /** Neck base sits this far above the shoulder midpoint, relative to span */
-  neckLift: 0.11,
+  neckLift: 0.14,
   /** Fallbacks when only the face is tracked, relative to jaw width */
-  chainToJaw: 1.25,
-  neckDropFromChin: 0.55,
+  chainToJaw: 1.4,
+  neckDropFromChin: 0.5,
+  /**
+   * Seen from the front the chest slopes away, so a necklace's drop is
+   * foreshortened relative to the flat product shot. Per product because a
+   * short strand hugs the neck while a pendant chain hangs lower.
+   */
+  dropScale: { 'necklace-2': 0.62 } as Record<string, number>,
+  defaultDropScale: 0.78,
 };
 
 export class TryOnEngine {
@@ -243,7 +253,6 @@ export class TryOnEngine {
     this.facingMode = facing;
     this.mirror = facing === 'user';
     this.resetSmoothing();
-    this.lastTimestamp = -1;
 
     this.stopStream();
 
@@ -522,7 +531,6 @@ export class TryOnEngine {
     if (this.running) return;
     this.running = true;
     this.lastFrameTime = performance.now();
-    this.lastTimestamp = -1;
     this.loop();
   }
 
@@ -540,13 +548,13 @@ export class TryOnEngine {
     this.renderFrame();
   };
 
+  /**
+   * MediaPipe requires strictly increasing timestamps per landmarker for the
+   * life of the page. video.currentTime restarts at 0 on a camera switch, so
+   * use the wall clock instead.
+   */
   private nextTimestamp(): number {
-    if (!this.video) return 0;
-    const t = this.video.currentTime * 1000;
-    if (t <= this.lastTimestamp) {
-      this.lastTimestamp += 1;
-      return this.lastTimestamp;
-    }
+    const t = Math.max(performance.now(), this.lastTimestamp + 1);
     this.lastTimestamp = t;
     return t;
   }
@@ -667,9 +675,11 @@ export class TryOnEngine {
     anchorX = 0.5,
     anchorY = 0.5,
     flipV = false,
+    scaleY = 1,
   ) {
-    this.lastDraw = () => this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV);
-    this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV);
+    this.lastDraw = () =>
+      this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV, scaleY);
+    this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV, scaleY);
   }
 
   private paintImage(
@@ -681,15 +691,14 @@ export class TryOnEngine {
     anchorX: number,
     anchorY: number,
     flipV: boolean,
+    scaleY: number,
   ) {
     if (!this.overlayCtx) return;
     const height = width / asset.aspect;
     this.overlayCtx.save();
     this.overlayCtx.translate(x, y);
     this.overlayCtx.rotate(angle);
-    if (flipV) {
-      this.overlayCtx.scale(1, -1);
-    }
+    this.overlayCtx.scale(1, flipV ? -scaleY : scaleY);
     this.overlayCtx.drawImage(
       asset.image,
       -width * anchorX,
@@ -757,7 +766,7 @@ export class TryOnEngine {
   }
 
   private drawNecklace(target: { center: Pt; width: number; angle: number }) {
-    if (!this.necklaceAsset) return;
+    if (!this.necklaceAsset || !this.activeProduct) return;
     const b = this.necklaceBounds;
     const opaqueWidth = Math.max(0.05, b.right - b.left);
     const imageWidth = target.width / opaqueWidth;
@@ -765,6 +774,8 @@ export class TryOnEngine {
     const pos = this.neckCenter.update(target.center.x, target.center.y);
     const width = this.neckScale.update(imageWidth);
     const angle = this.neckRotation.update(target.angle);
+    const dropScale =
+      NECKLACE_TUNING.dropScale[this.activeProduct.id] ?? NECKLACE_TUNING.defaultDropScale;
 
     // Anchor at the top-centre of the chain so it hangs from the neck base.
     this.drawImageAt(
@@ -775,6 +786,8 @@ export class TryOnEngine {
       angle,
       (b.left + b.right) / 2,
       b.top,
+      false,
+      dropScale,
     );
   }
 
