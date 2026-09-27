@@ -140,9 +140,9 @@ const WATCH_TUNING = {
 
 const NECKLACE_TUNING = {
   /** Chain spread at the neck relative to the shoulder span (pose) */
-  chainToShoulders: 0.4,
+  chainToShoulders: 0.44,
   /** Neck base sits this far above the shoulder midpoint, relative to span */
-  neckLift: 0.14,
+  neckLift: 0.15,
   /** Fallbacks when only the face is tracked, relative to jaw width */
   chainToJaw: 1.4,
   neckDropFromChin: 0.5,
@@ -151,8 +151,10 @@ const NECKLACE_TUNING = {
    * foreshortened relative to the flat product shot. Per product because a
    * short strand hugs the neck while a pendant chain hangs lower.
    */
-  dropScale: { 'necklace-2': 0.62 } as Record<string, number>,
-  defaultDropScale: 0.78,
+  dropScale: { 'necklace-2': 0.7 } as Record<string, number>,
+  defaultDropScale: 0.8,
+  /** Top fraction of the chain that fades out as it passes behind the neck */
+  neckFade: 0.22,
 };
 
 export class TryOnEngine {
@@ -176,6 +178,7 @@ export class TryOnEngine {
   private watchGeometry: WatchGeometry = DEFAULT_WATCH_GEOMETRY;
   private watchGeometryCache = new Map<string, WatchGeometry>();
   private necklaceBounds: AlphaBounds = DEFAULT_ALPHA_BOUNDS;
+  private necklaceCanvas: HTMLCanvasElement | null = null;
   private necklaceBoundsCache = new Map<string, AlphaBounds>();
   private imageCache = new Map<string, LoadedImage>();
 
@@ -795,18 +798,61 @@ export class TryOnEngine {
     const dropScale =
       NECKLACE_TUNING.dropScale[this.activeProduct.id] ?? NECKLACE_TUNING.defaultDropScale;
 
-    // Anchor at the top-centre of the chain so it hangs from the neck base.
-    this.drawImageAt(
-      this.necklaceAsset,
-      pos.x,
-      pos.y,
-      width,
-      angle,
-      (b.left + b.right) / 2,
-      b.top,
-      false,
-      dropScale,
-    );
+    const asset = this.necklaceAsset;
+    const anchorX = (b.left + b.right) / 2;
+    const draw = () =>
+      this.paintNecklace(asset, pos.x, pos.y, width, angle, anchorX, b.top, dropScale);
+    this.lastDraw = draw;
+    draw();
+  }
+
+  /**
+   * Draws the chain anchored at its top-centre (the neck base) with the top
+   * ends fading out, as a real chain disappears behind the sides of the neck
+   * instead of ending on the skin; dropScale foreshortens the hang.
+   */
+  private paintNecklace(
+    asset: LoadedImage,
+    x: number,
+    y: number,
+    width: number,
+    angle: number,
+    anchorX: number,
+    anchorY: number,
+    dropScale: number,
+  ) {
+    if (!this.overlayCtx || width < 2) return;
+    const height = width / asset.aspect;
+    const cw = Math.ceil(width);
+    const ch = Math.ceil(height);
+    const off = (this.necklaceCanvas ??= document.createElement('canvas'));
+    if (off.width !== cw || off.height !== ch) {
+      off.width = cw;
+      off.height = ch;
+    }
+    const octx = off.getContext('2d');
+    if (!octx) return;
+
+    octx.globalCompositeOperation = 'source-over';
+    octx.clearRect(0, 0, cw, ch);
+    octx.drawImage(asset.image, 0, 0, width, height);
+
+    const top = anchorY * height;
+    const fadeEnd = top + (height - top) * NECKLACE_TUNING.neckFade;
+    const alpha = octx.createLinearGradient(0, top, 0, fadeEnd);
+    alpha.addColorStop(0, 'rgba(0,0,0,0)');
+    alpha.addColorStop(1, 'rgba(0,0,0,1)');
+    octx.globalCompositeOperation = 'destination-in';
+    octx.fillStyle = alpha;
+    octx.fillRect(0, 0, cw, ch);
+    octx.globalCompositeOperation = 'source-over';
+
+    this.overlayCtx.save();
+    this.overlayCtx.translate(x, y);
+    this.overlayCtx.rotate(angle);
+    this.overlayCtx.scale(1, dropScale);
+    this.overlayCtx.drawImage(off, -width * anchorX, -top);
+    this.overlayCtx.restore();
   }
 
   private drawRing(
