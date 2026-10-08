@@ -181,9 +181,9 @@ export class TryOnEngine {
 
   // Low base rates hide landmark jitter while still; the adaptive max lets
   // every overlay keep up with real movement instead of trailing behind it.
-  private ringCenter = new SmoothPoint(0.2, { max: 0.85, scale: 30, dead: 2 });
-  private ringScale = new SmoothValue(0.12, { max: 0.6, scale: 0.3, dead: 0.02 });
-  private ringRotation = new SmoothAngle(0.18, { max: 0.7, scale: 0.4, dead: 0.02 });
+  private ringCenter = new SmoothPoint(0.12, { max: 0.8, scale: 25, dead: 1.5 });
+  private ringScale = new SmoothValue(0.06, { max: 0.5, scale: 0.25, dead: 0.015 });
+  private ringRotation = new SmoothAngle(0.1, { max: 0.6, scale: 0.35, dead: 0.015 });
 
   private neckCenter = new SmoothPoint(0.3, { max: 0.85, scale: 40 });
   private neckScale = new SmoothValue(0.3, { max: 0.7, scale: 0.3 });
@@ -193,13 +193,13 @@ export class TryOnEngine {
   private glassesScale = new SmoothValue(0.35, { max: 0.8, scale: 0.3 });
   private glassesRotation = new SmoothAngle(0.3, { max: 0.8, scale: 0.4 });
 
-  private watchCenter = new SmoothPoint(0.12, { max: 0.85, scale: 40, dead: 3 });
-  private watchScale = new SmoothValue(0.1, { max: 0.6, scale: 0.3, dead: 0.02 });
-  private watchRotation = new SmoothAngle(0.12, { max: 0.7, scale: 0.5, dead: 0.02 });
+  private watchCenter = new SmoothPoint(0.08, { max: 0.8, scale: 30, dead: 2 });
+  private watchScale = new SmoothValue(0.05, { max: 0.5, scale: 0.25, dead: 0.015 });
+  private watchRotation = new SmoothAngle(0.08, { max: 0.6, scale: 0.4, dead: 0.015 });
   /** 0 or PI: which perpendicular of the forearm 12 o'clock currently points to */
   private watchFlip: number | null = null;
   private watchCanvas: HTMLCanvasElement | null = null;
-  private watchArmDir = new SmoothPoint(0.2, { max: 0.8, scale: 0.6, dead: 0.03 });
+  private watchArmDir = new SmoothPoint(0.1, { max: 0.7, scale: 0.5, dead: 0.02 });
   private lastPose: NormalizedLandmark[] | null = null;
   private poseFrame = 0;
 
@@ -258,17 +258,37 @@ export class TryOnEngine {
     return this.facingMode;
   }
 
-  async switchCamera(facing: CameraFacing) {
-    if (facing === this.facingMode) return;
+  /** Returns the facing actually in use afterwards (may differ on one-camera devices). */
+  async switchCamera(facing: CameraFacing): Promise<CameraFacing> {
+    if (facing === this.facingMode) return this.facingMode;
+    const previous = this.facingMode;
     this.facingMode = facing;
     this.mirror = facing === 'user';
     this.resetSmoothing();
+    this.lastDraw = null;
+    this.lostFrames = RESET_AFTER_LOST_FRAMES;
 
+    // The old camera must be released before the other one can be opened.
     this.stopStream();
+    if (this.video) this.video.srcObject = null;
 
     this.callbacks.onStatus('loading', 'Switching camera...');
-    await this.initCamera();
+    try {
+      await this.initCamera();
+    } catch (err) {
+      // Put the previous camera back so the user is not left with a black view.
+      this.facingMode = previous;
+      this.mirror = previous === 'user';
+      try {
+        await this.initCamera();
+        this.callbacks.onStatus('ready');
+      } catch {
+        // fall through to report the original failure
+      }
+      throw err;
+    }
     this.callbacks.onStatus('ready');
+    return this.facingMode;
   }
 
   private stopStream() {
@@ -276,23 +296,77 @@ export class TryOnEngine {
     this.stream = null;
   }
 
+  /**
+   * Asks for the requested camera strictly first: with only an "ideal"
+   * facing mode several Android browsers hand back the front camera again,
+   * which made the flip button look dead. Falls back to softer constraints
+   * (single-camera laptops, cameras that reject resolution hints).
+   */
   private async requestStream(): Promise<MediaStream> {
-    const facingMode = { ideal: this.facingMode };
-    try {
-      return await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-    } catch (err) {
-      // Some cameras reject resolution hints; retry with the bare minimum.
-      if (err instanceof DOMException && err.name === 'OverconstrainedError') {
-        return navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+    const size = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    const attempts: MediaTrackConstraints[] = [
+      { facingMode: { exact: this.facingMode }, ...size },
+      { facingMode: { exact: this.facingMode } },
+      { facingMode: { ideal: this.facingMode }, ...size },
+      { facingMode: { ideal: this.facingMode } },
+    ];
+    let lastErr: unknown;
+    for (const video of attempts) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      } catch (err) {
+        lastErr = err;
+        const relaxable =
+          err instanceof DOMException &&
+          (err.name === 'OverconstrainedError' ||
+            err.name === 'ConstraintNotSatisfiedError' ||
+            err.name === 'NotFoundError');
+        if (!relaxable) throw err;
       }
-      throw err;
+    }
+    throw lastErr;
+  }
+
+  /** Whether the device exposes more than one camera (after permission). */
+  async hasMultipleCameras(): Promise<boolean> {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter((d) => d.kind === 'videoinput').length > 1;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Swapping srcObject on a playing <video> makes Safari reject the pending
+   * play() with AbortError even though the new stream then plays fine; wait
+   * for metadata and tolerate that one case rather than failing the switch.
+   */
+  private async playVideo() {
+    const video = this.video;
+    if (!video) return;
+    if (video.readyState < 1) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          video.removeEventListener('loadedmetadata', done);
+          resolve();
+        };
+        video.addEventListener('loadedmetadata', done);
+        setTimeout(done, 1500);
+      });
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await video.play();
+        return;
+      } catch (err) {
+        const abort = err instanceof DOMException && err.name === 'AbortError';
+        if (!abort || attempt === 1) {
+          if (!video.paused) return;
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
     }
   }
 
@@ -339,10 +413,17 @@ export class TryOnEngine {
     }
 
     this.stream = stream;
+    // Mirror according to the camera we actually got, not the one we asked for.
+    const settings = stream.getVideoTracks()[0]?.getSettings();
+    if (settings?.facingMode === 'user' || settings?.facingMode === 'environment') {
+      this.facingMode = settings.facingMode;
+    }
+    this.mirror = this.facingMode === 'user';
+
     this.video.srcObject = stream;
     this.video.playsInline = true;
     this.video.muted = true;
-    await this.video.play();
+    await this.playVideo();
 
     await new Promise<void>((resolve, reject) => {
       const started = performance.now();

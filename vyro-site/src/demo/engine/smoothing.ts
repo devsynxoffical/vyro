@@ -18,9 +18,18 @@ function rateFor(base: number, change: number, opts: SmoothOptions): number {
   return Math.min(opts.max, base + beyond / opts.scale);
 }
 
+/**
+ * The adaptive rate is driven by a low-passed *signed* gap between target and
+ * value, not the raw per-frame change: landmark jitter alternates sign and
+ * cancels, while genuine movement keeps the same sign and builds up.
+ */
+const TREND_RATE = 0.35;
+
 export class SmoothPoint {
   private x = 0;
   private y = 0;
+  private tx = 0;
+  private ty = 0;
   private initialized = false;
 
   constructor(
@@ -32,11 +41,15 @@ export class SmoothPoint {
     if (!this.initialized) {
       this.x = targetX;
       this.y = targetY;
+      this.tx = 0;
+      this.ty = 0;
       this.initialized = true;
       return { x: this.x, y: this.y };
     }
 
-    const a = rateFor(this.alpha, Math.hypot(targetX - this.x, targetY - this.y), this.opts);
+    this.tx += (targetX - this.x - this.tx) * TREND_RATE;
+    this.ty += (targetY - this.y - this.ty) * TREND_RATE;
+    const a = rateFor(this.alpha, Math.hypot(this.tx, this.ty), this.opts);
     this.x += (targetX - this.x) * a;
     this.y += (targetY - this.y) * a;
     return { x: this.x, y: this.y };
@@ -49,6 +62,7 @@ export class SmoothPoint {
 
 export class SmoothValue {
   private value = 0;
+  private trend = 0;
   private initialized = false;
 
   constructor(
@@ -59,13 +73,15 @@ export class SmoothValue {
   update(target: number): number {
     if (!this.initialized) {
       this.value = target;
+      this.trend = 0;
       this.initialized = true;
       return this.value;
     }
 
     // Scale is relative to the value itself so it works for any pixel size.
-    const rel = Math.abs(target - this.value) / (Math.abs(this.value) || 1);
-    this.value += (target - this.value) * rateFor(this.alpha, rel, this.opts);
+    const rel = (target - this.value) / (Math.abs(this.value) || 1);
+    this.trend += (rel - this.trend) * TREND_RATE;
+    this.value += (target - this.value) * rateFor(this.alpha, Math.abs(this.trend), this.opts);
     return this.value;
   }
 
@@ -76,6 +92,7 @@ export class SmoothValue {
 
 export class SmoothAngle {
   private value = 0;
+  private trend = 0;
   private initialized = false;
 
   constructor(
@@ -86,6 +103,7 @@ export class SmoothAngle {
   update(target: number): number {
     if (!this.initialized) {
       this.value = target;
+      this.trend = 0;
       this.initialized = true;
       return this.value;
     }
@@ -94,7 +112,8 @@ export class SmoothAngle {
     while (diff > Math.PI) diff -= 2 * Math.PI;
     while (diff < -Math.PI) diff += 2 * Math.PI;
 
-    this.value += diff * rateFor(this.alpha, Math.abs(diff), this.opts);
+    this.trend += (diff - this.trend) * TREND_RATE;
+    this.value += diff * rateFor(this.alpha, Math.abs(this.trend), this.opts);
     return this.value;
   }
 

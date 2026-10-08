@@ -48,6 +48,7 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
   const [modelLoading, setModelLoading] = useState(false);
   const [cameraFacing, setCameraFacing] = useState<CameraFacing>('user');
   const [switchingCamera, setSwitchingCamera] = useState(false);
+  const [canFlip, setCanFlip] = useState(true);
 
   productRef.current = activeProduct;
   cameraFacingRef.current = cameraFacing;
@@ -90,6 +91,10 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
       );
       if (!isCurrent()) return;
       engine.start();
+      setCameraFacing(engine.getCameraFacing());
+      void engine.hasMultipleCameras().then((multi) => {
+        if (isCurrent()) setCanFlip(multi);
+      });
       await engine.setProduct(productRef.current);
     } catch (err) {
       engine.destroy();
@@ -124,9 +129,10 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
     const previous = cameraFacing;
     setCameraFacing(next);
     try {
-      await engineRef.current.switchCamera(next);
+      const actual = await engineRef.current.switchCamera(next);
+      setCameraFacing(actual);
     } catch (err) {
-      setCameraFacing(previous);
+      setCameraFacing(engineRef.current?.getCameraFacing() ?? previous);
       setStatus('error');
       setStatusMessage(err instanceof Error ? err.message : 'Failed to switch camera');
     } finally {
@@ -253,7 +259,8 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
             type="button"
             className="tryon-icon-btn"
             aria-label={cameraFacing === 'user' ? 'Use back camera' : 'Use front camera'}
-            disabled={!ready || switchingCamera}
+            disabled={!ready || switchingCamera || !canFlip}
+            title={canFlip ? undefined : 'Only one camera on this device'}
             onClick={() => void flipCamera()}
           >
             <svg viewBox="0 0 24 24" fill="none" aria-hidden>
