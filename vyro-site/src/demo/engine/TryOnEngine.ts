@@ -8,7 +8,12 @@ import {
 } from '@mediapipe/tasks-vision';
 import { PRODUCTS, type Product, type ProductType } from '../types';
 import { estimateFingerSize } from './fingerSizing';
-import { SmoothAngle, SmoothPoint, SmoothValue } from './smoothing';
+import {
+  PoseFilter,
+  SmoothDirection,
+  SmoothScalar,
+  type PoseFilterParams,
+} from './smoothing';
 import {
   DEFAULT_WATCH_GEOMETRY,
   measureWatchGeometry,
@@ -105,6 +110,8 @@ const DEFAULT_GLASSES_TUNING = { widthFactor: 1.0, anchorX: 0.5, anchorY: 0.405 
  */
 const HOLD_FRAMES = 8;
 const RESET_AFTER_LOST_FRAMES = 15;
+/** Consecutive detections needed before the product appears */
+const ACQUIRE_FRAMES = 3;
 
 const WATCH_TUNING = {
   /** Watch case diameter and wrist width in metres, for metric sizing */
@@ -134,6 +141,43 @@ const WATCH_TUNING = {
   strapSolid: 0.6,
   /** Hysteresis before flipping which way 12 o'clock points */
   flipMargin: 0.35,
+};
+
+/**
+ * Time-based filter tuning (One Euro). Position speed is measured in reference
+ * sizes per second (face width / palm length), so the same numbers hold near
+ * and far from the camera. minCutoff: steadiness at rest (lower = steadier);
+ * beta: how fast the filter opens up on real movement (higher = less lag).
+ */
+const FILTERS: Record<ProductType, PoseFilterParams> = {
+  glasses: {
+    position: { minCutoff: 0.6, beta: 6.0 },
+    scale: { minCutoff: 0.5, beta: 0.4 },
+    angle: { minCutoff: 1.0, beta: 1.0 },
+    maxScaleStep: 0.05,
+    scaleDeadband: 0.012,
+  },
+  necklace: {
+    position: { minCutoff: 0.45, beta: 4.0 },
+    scale: { minCutoff: 0.3, beta: 0.2 },
+    angle: { minCutoff: 0.4, beta: 0.4 },
+    maxScaleStep: 0.03,
+    scaleDeadband: 0.02,
+  },
+  ring: {
+    position: { minCutoff: 0.7, beta: 6.0 },
+    scale: { minCutoff: 0.4, beta: 0.3 },
+    angle: { minCutoff: 0.8, beta: 1.0 },
+    maxScaleStep: 0.05,
+    scaleDeadband: 0.02,
+  },
+  watch: {
+    position: { minCutoff: 0.6, beta: 6.0 },
+    scale: { minCutoff: 0.35, beta: 0.2 },
+    angle: { minCutoff: 0.7, beta: 0.8 },
+    maxScaleStep: 0.05,
+    scaleDeadband: 0.02,
+  },
 };
 
 const NECKLACE_TUNING = {
@@ -169,7 +213,21 @@ export class TryOnEngine {
   private watchAsset: LoadedImage | null = null;
   private watchGeometry: WatchGeometry = DEFAULT_WATCH_GEOMETRY;
   private watchGeometryCache = new Map<string, WatchGeometry>();
-  private neckRadius = new SmoothValue(0.25, { max: 0.7, scale: 0.3, dead: 0.02 });
+  private neckRadiusRatio = new SmoothScalar({ minCutoff: 0.3, beta: 0.1 });
+  /** Shoulder line from the pose model, pre-filtered: it is noisier than the face. */
+  private shoulderFilter = new PoseFilter({
+    position: { minCutoff: 0.4, beta: 3.0 },
+    scale: { minCutoff: 0.3, beta: 0.2 },
+    angle: { minCutoff: 0.3, beta: 0.3 },
+    maxScaleStep: 0.03,
+    scaleDeadband: 0.02,
+  });
+  /** Closed-mouth chin distance relative to forehead→nose-bridge, learned per user */
+  private chinRatio: number | null = null;
+  /** 0..0.5: how much the shoulder estimate contributes, faded rather than switched */
+  private shoulderWeight = 0;
+  private lastShoulders: { mid: Pt; span: number; angle: number } | null = null;
+  private lastNeckTime = 0;
   private imageCache = new Map<string, LoadedImage>();
 
   private animationId = 0;
@@ -179,27 +237,24 @@ export class TryOnEngine {
   private mirror = true;
   private lastTimestamp = -1;
 
-  // Low base rates hide landmark jitter while still; the adaptive max lets
-  // every overlay keep up with real movement instead of trailing behind it.
-  private ringCenter = new SmoothPoint(0.12, { max: 0.8, scale: 25, dead: 1.5 });
-  private ringScale = new SmoothValue(0.06, { max: 0.5, scale: 0.25, dead: 0.015 });
-  private ringRotation = new SmoothAngle(0.1, { max: 0.6, scale: 0.35, dead: 0.015 });
-
-  private neckCenter = new SmoothPoint(0.3, { max: 0.85, scale: 40 });
-  private neckScale = new SmoothValue(0.3, { max: 0.7, scale: 0.3 });
-  private neckRotation = new SmoothAngle(0.3, { max: 0.7, scale: 0.5 });
-
-  private glassesCenter = new SmoothPoint(0.4, { max: 0.9, scale: 30 });
-  private glassesScale = new SmoothValue(0.35, { max: 0.8, scale: 0.3 });
-  private glassesRotation = new SmoothAngle(0.3, { max: 0.8, scale: 0.4 });
-
-  private watchCenter = new SmoothPoint(0.08, { max: 0.8, scale: 30, dead: 2 });
-  private watchScale = new SmoothValue(0.05, { max: 0.5, scale: 0.25, dead: 0.015 });
-  private watchRotation = new SmoothAngle(0.08, { max: 0.6, scale: 0.4, dead: 0.015 });
+  private ringPose = new PoseFilter(FILTERS.ring);
+  private neckPose = new PoseFilter(FILTERS.necklace);
+  private glassesPose = new PoseFilter(FILTERS.glasses);
+  private glassesYaw = new SmoothScalar({ minCutoff: 1.0, beta: 0.6 });
+  private watchPose = new PoseFilter(FILTERS.watch);
+  /** Seconds, for the time-based filters */
+  private frameTime = 0;
+  /** Screen anchor of the hand being tracked, to stay on it when two are visible */
+  private handAnchor: Pt | null = null;
+  /** Detection only runs when the camera has produced a new frame. */
+  private videoFrameReady = true;
+  private lastVideoTime = -1;
+  private usesVideoFrameCallback = false;
+  private lastProcessedAt = 0;
   /** 0 or PI: which perpendicular of the forearm 12 o'clock currently points to */
   private watchFlip: number | null = null;
   private watchCanvas: HTMLCanvasElement | null = null;
-  private watchArmDir = new SmoothPoint(0.1, { max: 0.7, scale: 0.5, dead: 0.02 });
+  private watchArmDir = new SmoothDirection({ minCutoff: 0.5, beta: 0.5 });
   private lastPose: NormalizedLandmark[] | null = null;
   private poseFrame = 0;
 
@@ -209,6 +264,7 @@ export class TryOnEngine {
   private frameCount = 0;
   private lastTracking = false;
   private lostFrames = 0;
+  private acquiredFrames = 0;
   /** Redraws the last overlay, used to bridge short detection dropouts */
   private lastDraw: (() => void) | null = null;
   private callbacks: EngineCallbacks;
@@ -267,6 +323,7 @@ export class TryOnEngine {
     this.resetSmoothing();
     this.lastDraw = null;
     this.lostFrames = RESET_AFTER_LOST_FRAMES;
+    this.acquiredFrames = 0;
 
     // The old camera must be released before the other one can be opened.
     this.stopStream();
@@ -520,9 +577,13 @@ export class TryOnEngine {
     return ready;
   }
 
-  private detectPose(ts: number): NormalizedLandmark[] | null {
+  /**
+   * @param everyFrame the necklace is anchored to the shoulders, so it needs a
+   *   fresh skeleton each frame; reusing every other result made it step.
+   */
+  private detectPose(ts: number, everyFrame = false): NormalizedLandmark[] | null {
     if (!this.poseLandmarker || !this.video) return null;
-    if (this.poseFrame++ % 2 === 0) {
+    if (everyFrame || this.poseFrame++ % 2 === 0) {
       const res = this.poseLandmarker.detectForVideo(this.video, ts);
       this.lastPose = res.landmarks[0] ?? null;
     }
@@ -556,19 +617,34 @@ export class TryOnEngine {
   }
 
   private resetSmoothing() {
-    this.ringCenter.reset();
-    this.ringScale.reset();
-    this.ringRotation.reset();
-    this.neckCenter.reset();
-    this.neckScale.reset();
-    this.neckRotation.reset();
-    this.neckRadius.reset();
-    this.glassesCenter.reset();
-    this.glassesScale.reset();
-    this.glassesRotation.reset();
-    this.watchCenter.reset();
-    this.watchScale.reset();
-    this.watchRotation.reset();
+    this.resetRing();
+    this.resetNeck();
+    this.resetGlasses();
+    this.resetWatch();
+  }
+
+  private resetRing() {
+    this.ringPose.reset();
+    this.handAnchor = null;
+  }
+
+  private resetNeck() {
+    this.neckPose.reset();
+    this.neckRadiusRatio.reset();
+    this.shoulderFilter.reset();
+    this.chinRatio = null;
+    this.shoulderWeight = 0;
+    this.lastShoulders = null;
+  }
+
+  private resetGlasses() {
+    this.glassesPose.reset();
+    this.glassesYaw.reset();
+  }
+
+  private resetWatch() {
+    this.watchPose.reset();
+    this.handAnchor = null;
     this.resetWatchArmState();
   }
 
@@ -584,6 +660,7 @@ export class TryOnEngine {
     this.lastTracking = false;
     this.lastDraw = null;
     this.lostFrames = RESET_AFTER_LOST_FRAMES;
+    this.acquiredFrames = 0;
 
     const loaded = await this.getImage(product.image);
     // A newer selection arrived while this image was loading.
@@ -619,7 +696,46 @@ export class TryOnEngine {
     if (this.running) return;
     this.running = true;
     this.lastFrameTime = performance.now();
+    this.watchVideoFrames();
     this.loop();
+  }
+
+  /**
+   * requestVideoFrameCallback fires once per decoded camera frame. Running the
+   * trackers only then (instead of on every screen refresh) stops the same
+   * frame being processed twice on 60/120 Hz screens, which wasted GPU time
+   * and fed duplicate samples into the smoothing.
+   */
+  private watchVideoFrames() {
+    type RvfcVideo = HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: () => void) => number;
+    };
+    const video = this.video as RvfcVideo | null;
+    if (!video?.requestVideoFrameCallback) return;
+    this.usesVideoFrameCallback = true;
+    const onFrame = () => {
+      if (!this.running || this.destroyed) return;
+      this.videoFrameReady = true;
+      (this.video as RvfcVideo | null)?.requestVideoFrameCallback?.(onFrame);
+    };
+    video.requestVideoFrameCallback(onFrame);
+  }
+
+  private hasNewVideoFrame(): boolean {
+    if (!this.video) return false;
+    if (this.usesVideoFrameCallback) {
+      const now = performance.now();
+      // Safety net: if the callback chain ever stalls (e.g. across a camera
+      // switch on some browsers), keep processing rather than freezing.
+      const ready = this.videoFrameReady || now - this.lastProcessedAt > 250;
+      this.videoFrameReady = false;
+      if (ready) this.lastProcessedAt = now;
+      return ready;
+    }
+    const t = this.video.currentTime;
+    if (t === this.lastVideoTime) return false;
+    this.lastVideoTime = t;
+    return true;
   }
 
   stop() {
@@ -657,20 +773,26 @@ export class TryOnEngine {
     const product = this.activeProduct;
     const now = performance.now();
 
+    // No frame yet (e.g. mid camera switch); detectForVideo would throw.
+    if (!product || this.video.readyState < 2) {
+      this.overlayCtx.clearRect(0, 0, vw, vh);
+      return;
+    }
+    // Same camera frame as last time: keep the current overlay on screen.
+    if (!this.hasNewVideoFrame()) return;
+
     this.frameCount++;
     if (now - this.lastFrameTime >= 1000) {
-      this.callbacks.onFps?.(this.frameCount);
+      this.callbacks.onFps?.(Math.round((this.frameCount * 1000) / (now - this.lastFrameTime)));
       this.frameCount = 0;
       this.lastFrameTime = now;
     }
 
     this.overlayCtx.clearRect(0, 0, vw, vh);
-
-    // No frame yet (e.g. mid camera switch); detectForVideo would throw.
-    if (!product || this.video.readyState < 2) return;
     if (!this.modelsReady(product.type)) return;
 
     const ts = this.nextTimestamp();
+    this.frameTime = now / 1000;
     let detected = false;
     // True when the target was just re-acquired after a real loss.
     const fresh = this.lostFrames >= RESET_AFTER_LOST_FRAMES;
@@ -681,26 +803,20 @@ export class TryOnEngine {
         const res = this.faceLandmarker.detectForVideo(this.video, ts);
         if (res.faceLandmarks.length > 0) {
           detected = true;
-          if (fresh) {
-            this.glassesCenter.reset();
-            this.glassesScale.reset();
-            this.glassesRotation.reset();
-          }
+          if (fresh) this.resetGlasses();
           if (this.glassesAsset) this.drawGlasses(res, vw, vh);
         }
         break;
       }
       case 'necklace': {
-        const pose = this.detectPose(ts);
+        const pose = this.detectPose(ts, true);
         const face = this.faceLandmarker?.detectForVideo(this.video, ts);
         const target = this.neckFrame(pose, face?.faceLandmarks[0], vw, vh);
         if (target) {
           detected = true;
           if (fresh) {
-            this.neckCenter.reset();
-            this.neckScale.reset();
-            this.neckRotation.reset();
-            this.neckRadius.reset();
+            this.neckPose.reset();
+            this.neckRadiusRatio.reset();
           }
           this.drawNecklace(target);
         }
@@ -713,13 +829,8 @@ export class TryOnEngine {
         if (res.landmarks.length > 0) {
           detected = true;
           if (fresh) {
-            this.ringCenter.reset();
-            this.ringScale.reset();
-            this.ringRotation.reset();
-            this.watchCenter.reset();
-            this.watchScale.reset();
-            this.watchRotation.reset();
-            this.resetWatchArmState();
+            this.resetRing();
+            this.resetWatch();
           }
           if (product.type === 'ring' && this.ringAsset) {
             this.drawRing(res, vw, vh);
@@ -734,13 +845,23 @@ export class TryOnEngine {
     let tracking = detected;
     if (detected) {
       this.lostFrames = 0;
+      // Only show the product once the target has been seen for a few frames
+      // in a row, so false detections at the frame edge do not flash it.
+      if (this.acquiredFrames < ACQUIRE_FRAMES) {
+        this.acquiredFrames++;
+        if (this.acquiredFrames < ACQUIRE_FRAMES) {
+          this.overlayCtx.clearRect(0, 0, vw, vh);
+          tracking = false;
+        }
+      }
     } else {
       this.lostFrames++;
-      if (this.lostFrames <= HOLD_FRAMES && this.lastDraw) {
+      if (this.lostFrames <= HOLD_FRAMES && this.lastDraw && this.acquiredFrames >= ACQUIRE_FRAMES) {
         this.lastDraw();
         tracking = true;
       } else {
         this.lastDraw = null;
+        if (this.lostFrames > HOLD_FRAMES) this.acquiredFrames = 0;
       }
     }
 
@@ -766,10 +887,11 @@ export class TryOnEngine {
     anchorY = 0.5,
     flipV = false,
     scaleY = 1,
+    scaleX = 1,
   ) {
     this.lastDraw = () =>
-      this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV, scaleY);
-    this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV, scaleY);
+      this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV, scaleY, scaleX);
+    this.paintImage(asset, x, y, width, angle, anchorX, anchorY, flipV, scaleY, scaleX);
   }
 
   private paintImage(
@@ -782,13 +904,18 @@ export class TryOnEngine {
     anchorY: number,
     flipV: boolean,
     scaleY: number,
+    scaleX = 1,
   ) {
     if (!this.overlayCtx) return;
     const height = width / asset.aspect;
     this.overlayCtx.save();
     this.overlayCtx.translate(x, y);
     this.overlayCtx.rotate(angle);
-    this.overlayCtx.scale(1, flipV ? -scaleY : scaleY);
+    // Soft contact shadow so the product sits on the skin instead of floating.
+    this.overlayCtx.shadowColor = 'rgba(0, 0, 0, 0.28)';
+    this.overlayCtx.shadowBlur = Math.min(10, Math.max(3, width * 0.025));
+    this.overlayCtx.shadowOffsetY = Math.min(4, Math.max(1, width * 0.01));
+    this.overlayCtx.scale(scaleX, flipV ? -scaleY : scaleY);
     this.overlayCtx.drawImage(
       asset.image,
       -width * anchorX,
@@ -799,10 +926,24 @@ export class TryOnEngine {
     this.overlayCtx.restore();
   }
 
+  /** 3D distance in pixels; MediaPipe z is in the same units as x. */
+  private dist3(a: NormalizedLandmark, b: NormalizedLandmark, w: number, h: number) {
+    return Math.hypot((a.x - b.x) * w, (a.y - b.y) * h, (a.z - b.z) * w);
+  }
+
   /**
    * Neck axis at the collar line, neck radius and scene scale (px/cm). The
    * face gives the most reliable scale and neck width; pose shoulders give
    * the collar height and tilt; either alone still works.
+   *
+   * Stability measures:
+   * - face width is measured in 3D, so turning the head does not shrink the
+   *   necklace (it sits on the body, which did not move);
+   * - the chin is estimated from the rigid upper face, because the chin
+   *   landmark drops whenever the mouth opens (the necklace bounced on speech);
+   * - the shoulder line is filtered on its own and faded in/out instead of
+   *   switching, so pose visibility flicker does not make the chain jump;
+   * - the chest follows head roll only partly.
    */
   private neckFrame(
     pose: NormalizedLandmark[] | null,
@@ -811,40 +952,75 @@ export class TryOnEngine {
     h: number,
   ): NeckFrame | null {
     const T = NECKLACE_TUNING;
+    const t = this.frameTime;
+    const dt = Math.min(0.2, Math.max(0, t - this.lastNeckTime));
+    this.lastNeckTime = t;
+
     let shoulders: { mid: Pt; span: number; angle: number } | null = null;
     const ls = pose?.[POSE.leftShoulder];
     const rs = pose?.[POSE.rightShoulder];
-    if (this.visible(ls) && this.visible(rs)) {
+    const minVis = this.shoulderWeight > 0.05 ? 0.35 : POSE_MIN_VISIBILITY;
+    if (ls && rs && (ls.visibility ?? 1) >= minVis && (rs.visibility ?? 1) >= minVis) {
       const a = this.toScreen(ls.x, ls.y, w, h);
       const b = this.toScreen(rs.x, rs.y, w, h);
       const [l, r] = a.x <= b.x ? [a, b] : [b, a];
       const span = Math.hypot(r.x - l.x, r.y - l.y);
       if (span > w * 0.05) {
-        shoulders = {
-          mid: { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2 },
+        if (this.shoulderWeight < 0.01) this.shoulderFilter.reset();
+        const f = this.shoulderFilter.update(
+          {
+            x: (l.x + r.x) / 2,
+            y: (l.y + r.y) / 2,
+            scale: span,
+            angle: Math.atan2(r.y - l.y, r.x - l.x),
+          },
+          t,
           span,
-          angle: Math.atan2(r.y - l.y, r.x - l.x),
-        };
+        );
+        shoulders = { mid: { x: f.x, y: f.y }, span: f.scale, angle: f.angle };
+        this.lastShoulders = shoulders;
       }
     }
+    const targetWeight = shoulders ? 0.5 : 0;
+    this.shoulderWeight += (targetWeight - this.shoulderWeight) * Math.min(1, dt * 5);
+    const sh = shoulders ?? (this.shoulderWeight > 0.01 ? this.lastShoulders : null);
 
     let faceInfo: { chin: Pt; width: number; angle: number } | null = null;
     if (face) {
       const a = this.toScreen(face[234].x, face[234].y, w, h);
       const b = this.toScreen(face[454].x, face[454].y, w, h);
       const [l, r] = a.x <= b.x ? [a, b] : [b, a];
-      const width = Math.hypot(r.x - l.x, r.y - l.y);
+      const width = this.dist3(face[234], face[454], w, h);
       if (width > w * 0.03) {
+        const forehead = this.toScreen(face[10].x, face[10].y, w, h);
+        const bridge = this.toScreen(face[168].x, face[168].y, w, h);
+        const chin = this.toScreen(face[152].x, face[152].y, w, h);
+        const upX = bridge.x - forehead.x;
+        const upY = bridge.y - forehead.y;
+        const upLen = Math.hypot(upX, upY) || 1;
+        const observed = Math.min(
+          2.8,
+          Math.max(1.3, Math.hypot(chin.x - bridge.x, chin.y - bridge.y) / upLen),
+        );
+        const mouthOpen = this.dist3(face[13], face[14], w, h) / width;
+        if (this.chinRatio === null) this.chinRatio = observed;
+        else if (mouthOpen < 0.035) this.chinRatio += (observed - this.chinRatio) * 0.05;
+        else if (observed < this.chinRatio) this.chinRatio = observed;
         faceInfo = {
-          chin: this.toScreen(face[152].x, face[152].y, w, h),
+          chin: { x: bridge.x + upX * this.chinRatio, y: bridge.y + upY * this.chinRatio },
           width,
           angle: Math.atan2(r.y - l.y, r.x - l.x),
         };
       }
     }
-    if (!shoulders && !faceInfo) return null;
+    if (!sh && !faceInfo) return null;
 
-    const angle = shoulders?.angle ?? faceInfo!.angle;
+    const sw = faceInfo ? this.shoulderWeight : 1;
+    const angle = sh
+      ? faceInfo
+        ? sh.angle * (sw / 0.5) + faceInfo.angle * 0.35 * (1 - sw / 0.5)
+        : sh.angle
+      : faceInfo!.angle * 0.35;
     const down = { x: -Math.sin(angle), y: Math.cos(angle) };
 
     let pxPerCm: number;
@@ -857,21 +1033,21 @@ export class TryOnEngine {
       const drop = faceInfo.width * T.neckBaseFromChin;
       x = faceInfo.chin.x + down.x * drop;
       y = faceInfo.chin.y + down.y * drop;
-      if (shoulders) {
-        // Shoulders know where the collar line is; average the two estimates.
-        const lift = shoulders.span * T.neckLiftFromShoulders;
-        const sy = shoulders.mid.y - down.y * lift;
-        const sx = shoulders.mid.x - down.x * lift;
-        x = (x + sx) / 2;
-        y = (y + sy) / 2;
+      if (sh && sw > 0) {
+        // Shoulders know where the collar line is; blend the two estimates.
+        const lift = sh.span * T.neckLiftFromShoulders;
+        const sx = sh.mid.x - down.x * lift;
+        const sy = sh.mid.y - down.y * lift;
+        x = x * (1 - sw) + sx * sw;
+        y = y * (1 - sw) + sy * sw;
       }
     } else {
-      const sh = shoulders!;
-      pxPerCm = sh.span / T.shoulderSpanCm;
-      radiusPx = sh.span * T.neckRadiusToShoulders;
-      const lift = sh.span * T.neckLiftFromShoulders;
-      x = sh.mid.x - down.x * lift;
-      y = sh.mid.y - down.y * lift;
+      const s2 = sh!;
+      pxPerCm = s2.span / T.shoulderSpanCm;
+      radiusPx = s2.span * T.neckRadiusToShoulders;
+      const lift = s2.span * T.neckLiftFromShoulders;
+      x = s2.mid.x - down.x * lift;
+      y = s2.mid.y - down.y * lift;
     }
     return { x, y, radiusPx, pxPerCm, angle };
   }
@@ -880,13 +1056,19 @@ export class TryOnEngine {
     if (!this.overlayCtx || !this.activeProduct) return;
     const style = NECKLACE_STYLES[this.activeProduct.id];
     if (!style) return;
-    const pos = this.neckCenter.update(target.x, target.y);
+    const t = this.frameTime;
+    const pose = this.neckPose.update(
+      { x: target.x, y: target.y, scale: target.pxPerCm, angle: target.angle },
+      t,
+      target.pxPerCm * NECKLACE_TUNING.faceWidthCm,
+    );
+    const ratio = this.neckRadiusRatio.update(target.radiusPx / target.pxPerCm, t);
     const frame: NeckFrame = {
-      x: pos.x,
-      y: pos.y,
-      radiusPx: this.neckRadius.update(target.radiusPx),
-      pxPerCm: this.neckScale.update(target.pxPerCm),
-      angle: this.neckRotation.update(target.angle),
+      x: pose.x,
+      y: pose.y,
+      radiusPx: ratio * pose.scale,
+      pxPerCm: pose.scale,
+      angle: pose.angle,
     };
     const ctx = this.overlayCtx;
     const pendant = this.pendantAsset;
@@ -902,20 +1084,7 @@ export class TryOnEngine {
   ) {
     if (!this.ringAsset || !this.activeProduct) return;
 
-    let bestIndex = 0;
-    let bestScore = -1;
-    result.landmarks.forEach((hand, i) => {
-      const ringMcp = hand[13];
-      const ringPip = hand[14];
-      const ringTip = hand[16];
-      const score =
-        Math.hypot(ringTip.x - ringMcp.x, ringTip.y - ringMcp.y) *
-        Math.hypot(ringTip.x - ringPip.x, ringTip.y - ringPip.y);
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = i;
-      }
-    });
+    const bestIndex = this.pickHand(result.landmarks, w, h, 13);
     const bestHand = result.landmarks[bestIndex];
     const pxPerMeter = this.handPxPerMeter(
       bestHand,
@@ -958,16 +1127,19 @@ export class TryOnEngine {
     const ringWidth = ringOuterWidth / tuning.bandRatio;
     const angle = Math.atan2(pipPt.y - mcpPt.y, pipPt.x - mcpPt.x) + Math.PI / 2;
 
-    const smoothPos = this.ringCenter.update(centerX, centerY);
-    const smoothScale = this.ringScale.update(ringWidth);
-    const smoothAngle = this.ringRotation.update(angle);
+    const palmPx = pxPerMeter ? pxPerMeter * 0.09 : sizing.palmScale;
+    const pose = this.ringPose.update(
+      { x: centerX, y: centerY, scale: ringWidth, angle },
+      this.frameTime,
+      palmPx,
+    );
 
     this.drawImageAt(
       this.ringAsset,
-      smoothPos.x,
-      smoothPos.y,
-      smoothScale,
-      smoothAngle,
+      pose.x,
+      pose.y,
+      pose.scale,
+      pose.angle,
       0.5,
       tuning.anchorY,
     );
@@ -981,67 +1153,71 @@ export class TryOnEngine {
     if (!this.glassesAsset || !this.activeProduct) return;
 
     const lm = result.faceLandmarks[0];
-    const leftEyeOuter = lm[33];
-    const rightEyeOuter = lm[263];
-    const leftEyeInner = lm[133];
-    const rightEyeInner = lm[362];
-    const leftEyeTop = lm[159];
-    const rightEyeTop = lm[386];
-    const noseBridge = lm[6];
-    const leftEar = lm[234];
-    const rightEar = lm[454];
+    // Eye corners and the nose bridge are rigid. The eyelid points used before
+    // (159/386) move on every blink, which made the frames twitch.
+    const lOut = lm[33];
+    const rOut = lm[263];
+    const lIn = lm[133];
+    const rIn = lm[362];
+    const lOutPt = this.toScreen(lOut.x, lOut.y, w, h);
+    const rOutPt = this.toScreen(rOut.x, rOut.y, w, h);
+    const lInPt = this.toScreen(lIn.x, lIn.y, w, h);
+    const rInPt = this.toScreen(rIn.x, rIn.y, w, h);
+    const bridgePt = this.toScreen(lm[168].x, lm[168].y, w, h);
+    const foreheadPt = this.toScreen(lm[10].x, lm[10].y, w, h);
 
-    const leftEyeOuterPt = this.toScreen(leftEyeOuter.x, leftEyeOuter.y, w, h);
-    const rightEyeOuterPt = this.toScreen(rightEyeOuter.x, rightEyeOuter.y, w, h);
-    const leftEyeInnerPt = this.toScreen(leftEyeInner.x, leftEyeInner.y, w, h);
-    const rightEyeInnerPt = this.toScreen(rightEyeInner.x, rightEyeInner.y, w, h);
-    const leftEyeTopPt = this.toScreen(leftEyeTop.x, leftEyeTop.y, w, h);
-    const rightEyeTopPt = this.toScreen(rightEyeTop.x, rightEyeTop.y, w, h);
-    const noseBridgePt = this.toScreen(noseBridge.x, noseBridge.y, w, h);
-    const leftEarPt = this.toScreen(leftEar.x, leftEar.y, w, h);
-    const rightEarPt = this.toScreen(rightEar.x, rightEar.y, w, h);
-
-    const eyeOuterSpan = Math.hypot(
-      rightEyeOuterPt.x - leftEyeOuterPt.x,
-      rightEyeOuterPt.y - leftEyeOuterPt.y,
-    );
-    const eyeInnerSpan = Math.hypot(
-      rightEyeInnerPt.x - leftEyeInnerPt.x,
-      rightEyeInnerPt.y - leftEyeInnerPt.y,
-    );
-    const earSpan = Math.hypot(
-      rightEarPt.x - leftEarPt.x,
-      rightEarPt.y - leftEarPt.y,
-    );
-
-    const eyeMidX = (leftEyeTopPt.x + rightEyeTopPt.x) / 2;
-    const eyeMidY = (leftEyeTopPt.y + rightEyeTopPt.y) / 2;
-    const centerX = eyeMidX * 0.85 + noseBridgePt.x * 0.15;
-    const centerY = eyeMidY * 0.92 + noseBridgePt.y * 0.08;
-
-    const spanEstimate = eyeOuterSpan * 1.75 + eyeInnerSpan * 0.1;
-    const earEstimate = earSpan * 0.88;
-
+    // True eye spans in 3D: turning the head no longer shrinks the frames, and
+    // there is no more switching between two different size estimates.
+    const outer3 = this.dist3(lOut, rOut, w, h);
+    const inner3 = this.dist3(lIn, rIn, w, h);
     const tuning = GLASSES_TUNING[this.activeProduct.id] ?? DEFAULT_GLASSES_TUNING;
-    const rawWidth = Math.max(spanEstimate, earEstimate) * tuning.widthFactor;
-    const angle = Math.atan2(
-      rightEyeTopPt.y - leftEyeTopPt.y,
-      rightEyeTopPt.x - leftEyeTopPt.x,
+    const width = (outer3 * 1.75 + inner3 * 0.1) * tuning.widthFactor;
+
+    const ax = rOutPt.x - lOutPt.x;
+    const ay = rOutPt.y - lOutPt.y;
+    const aLen = Math.hypot(ax, ay) || 1;
+    const axis = { x: ax / aLen, y: ay / aLen };
+    const angle = Math.atan2(ay, ax);
+
+    const mid = {
+      x: (lOutPt.x + rOutPt.x + lInPt.x + rInPt.x) / 4,
+      y: (lOutPt.y + rOutPt.y + lInPt.y + rInPt.y) / 4,
+    };
+    let up = { x: axis.y, y: -axis.x };
+    if ((foreheadPt.x - mid.x) * up.x + (foreheadPt.y - mid.y) * up.y < 0) {
+      up = { x: -up.x, y: -up.y };
+    }
+    // Frames sit in front of the eyes, so follow the bridge sideways when the
+    // head turns; lift to the eyelid height the product art was tuned for.
+    const along = (bridgePt.x - mid.x) * axis.x + (bridgePt.y - mid.y) * axis.y;
+    const lift = width * 0.031;
+    const pose = this.glassesPose.update(
+      {
+        x: mid.x + axis.x * along * 0.6 + up.x * lift,
+        y: mid.y + axis.y * along * 0.6 + up.y * lift,
+        scale: width,
+        angle,
+      },
+      this.frameTime,
+      width,
     );
 
-    const smoothPos = this.glassesCenter.update(centerX, centerY);
-    const smoothScale = this.glassesScale.update(rawWidth);
-    const smoothAngle = this.glassesRotation.update(angle);
+    // A flat frame front narrows as the head turns, like real glasses.
+    const dz = (rOut.z - lOut.z) * w;
+    const yaw = this.glassesYaw.update(Math.atan2(Math.abs(dz), aLen), this.frameTime);
+    const squash = Math.max(0.62, Math.cos(yaw));
 
     this.drawImageAt(
       this.glassesAsset,
-      smoothPos.x,
-      smoothPos.y,
-      smoothScale,
-      smoothAngle,
+      pose.x,
+      pose.y,
+      pose.scale,
+      pose.angle,
       tuning.anchorX,
       tuning.anchorY,
       this.mirror,
+      1,
+      squash,
     );
   }
 
@@ -1103,6 +1279,39 @@ export class TryOnEngine {
   }
 
   /**
+   * Stay on the hand already being tracked. Re-picking the "best" hand every
+   * frame made the product jump between hands when both were in view.
+   */
+  private pickHand(hands: NormalizedLandmark[][], w: number, h: number, anchorIdx: number) {
+    let idx = 0;
+    if (hands.length > 1) {
+      if (this.handAnchor) {
+        let best = Infinity;
+        hands.forEach((hand, i) => {
+          const p = this.toScreen(hand[anchorIdx].x, hand[anchorIdx].y, w, h);
+          const d = Math.hypot(p.x - this.handAnchor!.x, p.y - this.handAnchor!.y);
+          if (d < best) {
+            best = d;
+            idx = i;
+          }
+        });
+      } else {
+        let best = -1;
+        hands.forEach((hand, i) => {
+          const size = Math.hypot(hand[9].x - hand[0].x, hand[9].y - hand[0].y);
+          if (size > best) {
+            best = size;
+            idx = i;
+          }
+        });
+      }
+    }
+    const a = hands[idx][anchorIdx];
+    this.handAnchor = this.toScreen(a.x, a.y, w, h);
+    return idx;
+  }
+
+  /**
    * Screen pixels per metre for this hand, from the metric world landmarks.
    * Foreshortening can only shrink a pixel distance, so the least
    * foreshortened landmark pairs (largest px/m) carry the true scale; this is
@@ -1120,9 +1329,9 @@ export class TryOnEngine {
     ];
     const ratios: number[] = [];
     for (const [a, b] of pairs) {
-      const pa = this.toScreen(hand[a].x, hand[a].y, w, h);
-      const pb = this.toScreen(hand[b].x, hand[b].y, w, h);
-      const px = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+      // Include landmark depth (same units as x): bones pointing at the camera
+      // then no longer read as short, so tilting the hand stops shrinking it.
+      const px = this.dist3(hand[a], hand[b], w, h);
       const m = Math.hypot(
         world[a].x - world[b].x,
         world[a].y - world[b].y,
@@ -1157,18 +1366,7 @@ export class TryOnEngine {
   ) {
     if (!this.watchAsset) return;
 
-    let bestIndex = 0;
-    let bestScore = -1;
-    for (let i = 0; i < result.landmarks.length; i++) {
-      const hand = result.landmarks[i];
-      const wristLm = hand[0];
-      const middleLm = hand[9];
-      const score = Math.hypot(middleLm.x - wristLm.x, middleLm.y - wristLm.y);
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = i;
-      }
-    }
+    const bestIndex = this.pickHand(result.landmarks, w, h, 0);
     const bestHand = result.landmarks[bestIndex];
     const world = result.worldLandmarks?.[bestIndex];
     const pxPerMeter = this.handPxPerMeter(bestHand, world, w, h);
@@ -1192,8 +1390,7 @@ export class TryOnEngine {
       this.poseArmAxis(pose, wristPt, w, h, knuckleSpan * 1.5) ??
       this.normalizeDir(middlePt.x - wristPt.x, middlePt.y - wristPt.y);
 
-    const smoothArm = this.watchArmDir.update(target.x, target.y);
-    const armAxis = this.normalizeDir(smoothArm.x, smoothArm.y);
+    const armAxis = this.watchArmDir.update(target.x, target.y, this.frameTime);
 
     if (this.debug && this.overlayCtx) {
       const c = this.overlayCtx;
@@ -1266,22 +1463,24 @@ export class TryOnEngine {
       if (upness(other) > upness(this.watchFlip) + WATCH_TUNING.flipMargin) {
         this.watchFlip = other;
         // Snap rather than spin the dial half a turn.
-        this.watchRotation.reset();
+        this.watchPose.resetAngle();
       }
     }
     const angle = crownToHand + this.watchFlip;
 
-    const smoothPos = this.watchCenter.update(watchX, watchY);
-    const smoothScale = this.watchScale.update(watchWidth);
-    const rotation = this.watchRotation.update(angle);
-    const smoothCase = smoothScale * this.watchGeometry.caseWidthFrac;
+    const fit = this.watchPose.update(
+      { x: watchX, y: watchY, scale: watchWidth, angle },
+      this.frameTime,
+      palmLen,
+    );
+    const smoothCase = fit.scale * this.watchGeometry.caseWidthFrac;
 
     this.drawWatchWrapped(
       this.watchAsset,
-      smoothPos.x,
-      smoothPos.y,
-      smoothScale,
-      rotation,
+      fit.x,
+      fit.y,
+      fit.scale,
+      fit.angle,
       this.watchGeometry.caseCenterY,
       smoothCase * WATCH_TUNING.strapBand,
     );
