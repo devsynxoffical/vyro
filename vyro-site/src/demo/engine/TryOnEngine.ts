@@ -254,6 +254,7 @@ export class TryOnEngine {
   /** 0 or PI: which perpendicular of the forearm 12 o'clock currently points to */
   private watchFlip: number | null = null;
   private watchCanvas: HTMLCanvasElement | null = null;
+  private ringCanvas: HTMLCanvasElement | null = null;
   private watchArmDir = new SmoothDirection({ minCutoff: 0.5, beta: 0.5 });
   private lastPose: NormalizedLandmark[] | null = null;
   private poseFrame = 0;
@@ -781,6 +782,22 @@ export class TryOnEngine {
     // Same camera frame as last time: keep the current overlay on screen.
     if (!this.hasNewVideoFrame()) return;
 
+    // Back cameras often change resolution or orientation a moment after
+    // starting (or when the phone rotates). The overlay must always have the
+    // video's exact size, otherwise it is cropped differently from the picture
+    // underneath and products drift sideways.
+    const { videoWidth, videoHeight } = this.video;
+    if (
+      videoWidth > 0 &&
+      (this.overlayCanvas.width !== videoWidth || this.overlayCanvas.height !== videoHeight)
+    ) {
+      this.overlayCanvas.width = videoWidth;
+      this.overlayCanvas.height = videoHeight;
+      this.resetSmoothing();
+      this.lastDraw = null;
+      return;
+    }
+
     this.frameCount++;
     if (now - this.lastFrameTime >= 1000) {
       this.callbacks.onFps?.(Math.round((this.frameCount * 1000) / (now - this.lastFrameTime)));
@@ -1134,15 +1151,97 @@ export class TryOnEngine {
       palmPx,
     );
 
-    this.drawImageAt(
-      this.ringAsset,
-      pose.x,
-      pose.y,
-      pose.scale,
-      pose.angle,
-      0.5,
-      tuning.anchorY,
-    );
+    if (this.debug && this.overlayCtx) {
+      const c = this.overlayCtx;
+      c.save();
+      for (const i of [9, 10, 13, 14, 15, 16]) {
+        const pt = this.toScreen(bestHand[i].x, bestHand[i].y, w, h);
+        c.fillStyle = i === 13 || i === 14 ? '#ff00ff' : '#00e5ff';
+        c.fillRect(pt.x - 4, pt.y - 4, 8, 8);
+      }
+      c.fillStyle = '#fff';
+      c.font = '16px monospace';
+      c.fillText(
+        `${this.facingMode} mirror:${this.mirror} canvas:${w}x${h} video:${this.video?.videoWidth}x${this.video?.videoHeight}`,
+        12,
+        h - 16,
+      );
+      c.restore();
+    }
+
+    const asset = this.ringAsset;
+    const anchorY = tuning.anchorY;
+    const visible = pose.scale * tuning.bandRatio;
+    const draw = () =>
+      this.paintRingWrapped(asset, pose.x, pose.y, pose.scale, pose.angle, anchorY, visible);
+    this.lastDraw = draw;
+    draw();
+  }
+
+  /**
+   * A ring seen from above only shows the band across the width of the finger;
+   * beyond that it curves round the sides out of sight. Fade and shade the band
+   * there instead of letting the flat product shot stick out past the finger.
+   */
+  private paintRingWrapped(
+    asset: LoadedImage,
+    x: number,
+    y: number,
+    width: number,
+    angle: number,
+    anchorY: number,
+    visibleWidth: number,
+  ) {
+    if (!this.overlayCtx || width < 2) return;
+    const height = width / asset.aspect;
+    const cw = Math.ceil(width);
+    const ch = Math.ceil(height);
+    const off = (this.ringCanvas ??= document.createElement('canvas'));
+    if (off.width !== cw || off.height !== ch) {
+      off.width = cw;
+      off.height = ch;
+    }
+    const octx = off.getContext('2d');
+    if (!octx) return;
+
+    octx.globalCompositeOperation = 'source-over';
+    octx.clearRect(0, 0, cw, ch);
+    octx.drawImage(asset.image, 0, 0, width, height);
+
+    const cx = width / 2;
+    const half = visibleWidth / 2;
+    const stop = (v: number) => Math.min(1, Math.max(0, v / width));
+    const solid = half * 0.72;
+    const edge = half * 0.98;
+
+    const alpha = octx.createLinearGradient(0, 0, width, 0);
+    alpha.addColorStop(stop(cx - edge), 'rgba(0,0,0,0)');
+    alpha.addColorStop(stop(cx - solid), 'rgba(0,0,0,1)');
+    alpha.addColorStop(stop(cx + solid), 'rgba(0,0,0,1)');
+    alpha.addColorStop(stop(cx + edge), 'rgba(0,0,0,0)');
+    octx.globalCompositeOperation = 'destination-in';
+    octx.fillStyle = alpha;
+    octx.fillRect(0, 0, cw, ch);
+
+    const shade = octx.createLinearGradient(0, 0, width, 0);
+    shade.addColorStop(stop(cx - edge), 'rgba(0,0,0,0.55)');
+    shade.addColorStop(stop(cx - solid), 'rgba(0,0,0,0)');
+    shade.addColorStop(stop(cx + solid), 'rgba(0,0,0,0)');
+    shade.addColorStop(stop(cx + edge), 'rgba(0,0,0,0.55)');
+    octx.globalCompositeOperation = 'source-atop';
+    octx.fillStyle = shade;
+    octx.fillRect(0, 0, cw, ch);
+    octx.globalCompositeOperation = 'source-over';
+
+    const ctx = this.overlayCtx;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+    ctx.shadowBlur = Math.min(8, Math.max(2, width * 0.03));
+    ctx.shadowOffsetY = Math.min(3, Math.max(1, width * 0.012));
+    ctx.drawImage(off, -width / 2, -height * anchorY);
+    ctx.restore();
   }
 
   private drawGlasses(
