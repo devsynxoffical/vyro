@@ -25,7 +25,18 @@ Deno.serve(
           .maybeSingle();
         if (!inv || inv.company_id !== companyId) throw new HttpError(404, 'Invoice not found');
         if (inv.status === 'paid') throw new HttpError(409, 'This invoice is already paid');
-        if (inv.status === 'processing') throw new HttpError(409, 'A payment for this invoice is in progress');
+        if (inv.status === 'processing') {
+          // A checkout was started earlier (maybe abandoned). Ask OMPAY what
+          // became of it before allowing another one, so nobody pays twice.
+          const { data: open } = await client
+            .from('payments').select('id').eq('invoice_id', invoiceId).eq('status', 'processing')
+            .order('created_at', { ascending: false }).limit(1).maybeSingle();
+          const outcome = open ? await settlePayment(db, Ompay.fromEnv(), open.id) : 'processing';
+          if (outcome === 'successful') throw new HttpError(409, 'This invoice is already paid');
+          if (outcome !== 'failed') {
+            throw new HttpError(409, 'A payment for this invoice is still in progress. Please try again in a few minutes.');
+          }
+        }
         const payment = await db.rpc<string | null>('billing_claim_invoice', { p_invoice: invoiceId, p_flow: 'hosted' });
         if (!payment) throw new HttpError(409, 'This invoice cannot be paid right now');
         const url = await startHostedPayment(db, Ompay.fromEnv(), payment, Number(inv.total), inv.currency, APP_URL)
