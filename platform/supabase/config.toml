@@ -1,0 +1,16 @@
+# Functions that authenticate callers themselves (invite token, cron secret,
+# public licence check) must not require a Supabase login token at the gateway.
+[functions.register]
+verify_jwt = false
+
+[functions.billing-run]
+verify_jwt = false
+
+[functions.widget-status]
+verify_jwt = false
+
+[functions.client-billing]
+verify_jwt = true
+
+[functions.admin-clients]
+verify_jwt = true
