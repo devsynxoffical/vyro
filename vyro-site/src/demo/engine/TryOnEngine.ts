@@ -19,7 +19,12 @@ import {
   measureWatchGeometry,
   type WatchGeometry,
 } from './watchGeometry';
-import { NECKLACE_STYLES, renderNecklace, type NeckFrame } from './necklaceRenderer';
+import {
+  NECKLACE_STYLES,
+  renderNecklace,
+  type NeckFrame,
+  type NecklaceStyle,
+} from './necklaceRenderer';
 
 type Vision = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 type Pt = { x: number; y: number };
@@ -295,13 +300,41 @@ export class TryOnEngine {
     await Promise.all([this.initCamera(), firstModels]);
 
     void this.preloadAllProducts();
-    for (const kind of ['hand', 'face', 'pose'] as ModelKind[]) void this.ensureModel(kind);
+    // Warm only the trackers this catalogue can need (a ring-only shop never
+    // downloads the face model).
+    const kinds = new Set(this.catalog.flatMap((p) => MODELS_FOR[p.type]));
+    for (const kind of kinds) void this.ensureModel(kind);
 
     this.callbacks.onStatus('ready');
   }
 
+  /** The products offered in this session (defaults to the demo catalogue). */
+  private catalog: Product[] = PRODUCTS;
+
+  setCatalog(products: Product[]) {
+    this.catalog = products;
+  }
+
+  /** Built-in demo style, or one described by the client's own product. */
+  private necklaceStyle(product: Product): NecklaceStyle | undefined {
+    const o = product.necklace;
+    if (!o) return NECKLACE_STYLES[product.id];
+    const clamp = (v: number | undefined, lo: number, hi: number, d: number) =>
+      Math.min(hi, Math.max(lo, Number.isFinite(v) ? (v as number) : d));
+    if (o.kind === 'pearls') {
+      return { kind: 'pearls', lengthCm: clamp(o.lengthCm, 35, 90, 42), pearlMm: clamp(o.pearlMm, 3, 14, 7.5) };
+    }
+    return {
+      kind: 'chain',
+      lengthCm: clamp(o.lengthCm, 35, 90, 45),
+      chainColor: o.chainColor === 'silver' ? 'silver' : 'gold',
+      chainMm: 1.3,
+      pendant: { src: product.image, heightMm: clamp(o.pendantMm, 4, 80, 15) },
+    };
+  }
+
   async preloadAllProducts() {
-    const urls = [...new Set(PRODUCTS.map((p) => p.image))];
+    const urls = [...new Set(this.catalog.map((p) => p.image))];
     await Promise.all(
       urls.map((u) =>
         this.getImage(u).catch(() => {
@@ -606,6 +639,9 @@ export class TryOnEngine {
   private loadImage(url: string): Promise<LoadedImage> {
     return new Promise((resolve, reject) => {
       const img = new Image();
+      // Client product images come from another host; without this the canvas
+      // could not be read back (screenshots, watch measuring).
+      if (/^https?:\/\//i.test(url) && !url.startsWith(location.origin)) img.crossOrigin = 'anonymous';
       img.onload = () => {
         resolve({
           image: img,
@@ -669,7 +705,7 @@ export class TryOnEngine {
     for (const kind of MODELS_FOR[product.type]) void this.ensureModel(kind);
     switch (product.type) {
       case 'necklace': {
-        const pendant = NECKLACE_STYLES[product.id]?.pendant;
+        const pendant = this.necklaceStyle(product)?.pendant;
         this.pendantAsset = pendant ? await this.getImage(pendant.src) : null;
         if (this.activeProduct !== product) return;
         break;
@@ -1071,7 +1107,7 @@ export class TryOnEngine {
 
   private drawNecklace(target: NeckFrame) {
     if (!this.overlayCtx || !this.activeProduct) return;
-    const style = NECKLACE_STYLES[this.activeProduct.id];
+    const style = this.necklaceStyle(this.activeProduct);
     if (!style) return;
     const t = this.frameTime;
     const pose = this.neckPose.update(

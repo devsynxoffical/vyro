@@ -138,3 +138,72 @@ do $$ declare s public.subscriptions; begin
 end $$;
 
 select 'ALL RLS TESTS PASSED';
+
+-- ---------------- product catalogues
+insert into public.subscriptions (company_id, status, current_period_end)
+values ('10000000-0000-0000-0000-000000000002', 'active', current_date + 10)
+on conflict (company_id) do update set status = 'active', current_period_end = current_date + 10;
+update public.plans set product_limit = 2 where company_id = '10000000-0000-0000-0000-000000000001';
+update public.plans set product_limit = 5 where company_id = '10000000-0000-0000-0000-000000000002';
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c1', false);
+do $$ declare n int; begin
+  insert into public.products (company_id, type, name, sku, image_path) values
+    ('10000000-0000-0000-0000-000000000001', 'ring', 'Ring A', 'R-A', 'a/1.png'),
+    ('10000000-0000-0000-0000-000000000001', 'watch', 'Watch A', 'W-A', 'a/2.png');
+  begin
+    insert into public.products (company_id, type, name, image_path)
+    values ('10000000-0000-0000-0000-000000000001', 'ring', 'Third', 'a/3.png');
+    raise exception 'FAIL limit not enforced';
+  exception when sqlstate 'P0001' then
+    if sqlerrm not like 'PRODUCT_LIMIT%' then raise; end if;
+  end;
+  -- an inactive product does not count, and cannot be switched on over the limit
+  insert into public.products (company_id, type, name, image_path, active)
+  values ('10000000-0000-0000-0000-000000000001', 'ring', 'Draft', 'a/4.png', false);
+  begin
+    update public.products set active = true where name = 'Draft';
+    raise exception 'FAIL activate over limit';
+  exception when sqlstate 'P0001' then
+    if sqlerrm not like 'PRODUCT_LIMIT%' then raise; end if;
+  end;
+  update public.products set name = 'Ring A2' where name = 'Ring A';  -- plain edits still fine
+  begin
+    insert into public.products (company_id, type, name, image_path)
+    values ('10000000-0000-0000-0000-000000000002', 'ring', 'Planted', 'x.png');
+    raise exception 'FAIL insert into another company';
+  exception when insufficient_privilege then null; end;
+  assert (select count(*) from public.products) = 3, 'client sees only own products';
+end $$;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c2', false);
+do $$ declare n int; begin
+  assert (select count(*) from public.products) = 0, 'other client sees none';
+  update public.products set name = 'hacked';
+  get diagnostics n = row_count; assert n = 0, 'cannot edit another company''s products';
+  delete from public.products;
+  get diagnostics n = row_count; assert n = 0, 'cannot delete another company''s products';
+end $$;
+
+set role anon;
+select set_config('request.jwt.claim.sub', '', false);
+do $$ declare r jsonb; begin
+  begin perform * from public.products; raise exception 'FAIL anon reads products';
+  exception when insufficient_privilege then null; end;
+  r := public.widget_status('vyro_pk_alpha', 'alphajewels.om');
+  assert jsonb_array_length(r->'products') = 2, 'catalogue has the 2 live products';
+  assert (r->'products'->0->>'sku') = 'R-A', 'ordered';
+  assert public.widget_status('vyro_pk_alpha', 'evil.com') ? 'products' is false, 'no catalogue for other sites';
+end $$;
+reset role;
+-- plan lowered below the number of live products: the widget serves only what the plan includes
+update public.plans set product_limit = 1 where company_id = '10000000-0000-0000-0000-000000000001';
+do $$ begin
+  assert jsonb_array_length(public.widget_status('vyro_pk_alpha', 'alphajewels.om')->'products') = 1, 'served catalogue capped';
+end $$;
+update public.subscriptions set widget_override = 'force_off' where company_id = '10000000-0000-0000-0000-000000000001';
+do $$ begin
+  assert public.widget_status('vyro_pk_alpha', 'alphajewels.om') ? 'products' is false, 'no catalogue when off';
+end $$;
+
+select 'ALL RLS TESTS PASSED';

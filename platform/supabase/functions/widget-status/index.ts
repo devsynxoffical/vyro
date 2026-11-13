@@ -31,5 +31,13 @@ Deno.serve(async (req) => {
       headers: { ...headers, 'Cache-Control': 'no-store' },
     });
   }
-  return new Response(JSON.stringify(data), { headers });
+  // Turn stored image paths into public URLs the browser can load.
+  const base = `${Deno.env.get('SUPABASE_URL')}/storage/v1/object/public/products/`;
+  const products = Array.isArray(data?.products)
+    ? data.products.map((p: { image_path: string }) => {
+        const { image_path, ...rest } = p;
+        return { ...rest, image: base + image_path.split('/').map(encodeURIComponent).join('/') };
+      })
+    : undefined;
+  return new Response(JSON.stringify(products ? { ...data, products } : data), { headers });
 });

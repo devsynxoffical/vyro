@@ -5,6 +5,7 @@ import {
   type Company, type Invoice, type Notice, type PaymentMethod, type Plan, type Subscription,
 } from '../api';
 import { useAuth } from '../auth';
+import { ProductsCard } from '../Products';
 import { Card, CopyBox, ErrorNote, Field, InvoiceBadge, Shell, StatusBadge, useAction } from '../ui';
 
 interface PortalData {
@@ -221,6 +222,8 @@ export function Portal() {
         )}
       </Card>
 
+      {plan && <ProductsCard companyId={company.id} limit={plan.product_limit} />}
+
       <div className="sa-cols">
         <CompanyForm company={company} onSaved={reload} />
         <div>
@@ -302,9 +305,9 @@ function InvoiceRow({
               <span>Total</span>
               <span>{money(inv.total, inv.currency)}</span>
             </div>
-            <button className="sa-link" onClick={() => window.print()}>
-              Print
-            </button>
+            <Link className="sa-link" to={`/portal/invoices/${inv.id}`}>
+              Open invoice (print / PDF)
+            </Link>
           </td>
         </tr>
       )}

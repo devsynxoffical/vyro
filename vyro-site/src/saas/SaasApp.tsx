@@ -7,6 +7,7 @@ import { BillingReturn, Portal } from './pages/Portal';
 import { AdminHome, AdminNewClient } from './pages/AdminHome';
 import { AdminClient } from './pages/AdminClient';
 import { AdminSettings } from './pages/AdminSettings';
+import { InvoicePage } from './pages/InvoicePage';
 import './saas.css';
 
 /** Client portal and admin dashboard. Loaded on demand, separate from the marketing site. */
@@ -26,6 +27,8 @@ export default function SaasApp() {
         <Route path="portal" element={<RequireRole role="client"><Portal /></RequireRole>} />
         <Route path="portal/billing" element={<Navigate to="/portal" replace />} />
         <Route path="portal/billing/return" element={<RequireRole role="client"><BillingReturn /></RequireRole>} />
+        <Route path="portal/invoices/:id" element={<RequireRole role="client"><InvoicePage /></RequireRole>} />
+        <Route path="admin/invoices/:id" element={<RequireRole role="admin"><InvoicePage /></RequireRole>} />
         <Route path="admin" element={<RequireRole role="admin"><AdminHome /></RequireRole>} />
         <Route path="admin/new" element={<RequireRole role="admin"><AdminNewClient /></RequireRole>} />
         <Route path="admin/clients/:id" element={<RequireRole role="admin"><AdminClient /></RequireRole>} />

@@ -120,10 +120,37 @@ PGHOST=... PGPORT=... PGUSER=postgres platform/tests/run_db_tests.sh    # securi
 PGHOST=... PGPORT=... PGUSER=postgres platform/tests/run_flow_tests.sh  # full flow with a fake OMPAY (needs deno)
 ```
 
+## Client products
+
+Each client manages their own try-on catalogue in the portal (admins can do it
+for them on the client page): type, name, product code, price and a
+transparent PNG/WebP cut-out. The number of live products is capped by the
+plan's "products included"; the widget serves only that client's live
+products, only on their allowed websites, only while the subscription is live.
+
+- Floating button (default): opens the try-on with all products.
+- Product page button: `<button data-vyro-open="SKU">Try it on</button>` opens
+  that product. `data-button="off"` on the script tag hides the floating button.
+- `window.VYRO.open(sku)`, `VYRO.close()`, `VYRO.ready(fn)` for custom code.
+- Elements marked `data-vyro-show hidden` are revealed only while VYRO is live.
+
+Images: ring from above with the band left to right; watch flat with the strap
+top to bottom; glasses from the front; for a necklace upload the pendant only
+(the chain or pearl strand is drawn in 3D from the chosen style and length).
+
+## Invoices
+
+`/portal/invoices/:id` is a printable invoice (browser "Save as PDF"). Set
+`VITE_INVOICE_FROM` to the seller details to print (legal name, CR, address).
+VAT is not calculated: if VYRO is VAT-registered, prices entered are treated as
+final amounts and the invoice shows no tax line. Add this before invoicing
+VAT-registered clients.
+
 ## Not built yet
 
-- Per-client product catalogues: the widget currently opens the VYRO demo
-  try-on. "Products included" is recorded on the plan but not enforced.
+- VAT lines on invoices (see above).
 - Apple Pay / Samsung Pay buttons on VYRO's own pages (OMPAY's hosted page may
   offer them; to be confirmed with OMPAY).
-- PDF invoices (invoices can be printed from the portal).
+- Per-product fit adjustment (size/position fine-tuning for an unusual image).
+  Client rings and glasses use the default fit; watches are measured from the
+  image automatically.

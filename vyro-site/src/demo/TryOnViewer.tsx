@@ -19,6 +19,8 @@ import './TryOnViewer.css';
 interface TryOnViewerProps {
   activeProduct: Product;
   onProductChange: (product: Product) => void;
+  /** Products to offer; defaults to the demo catalogue */
+  products?: Product[];
 }
 
 function hintFor(type: ProductType, facing: CameraFacing): string {
@@ -35,7 +37,10 @@ function hintFor(type: ProductType, facing: CameraFacing): string {
   }
 }
 
-export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps) {
+export function TryOnViewer({ activeProduct, onProductChange, products }: TryOnViewerProps) {
+  const catalog = products ?? PRODUCTS;
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<TryOnEngine | null>(null);
@@ -83,6 +88,7 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
       },
     });
     engineRef.current = engine;
+    engine.setCatalog(catalogRef.current);
 
     try {
       await engine.init(
@@ -281,7 +287,7 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
       <div className="tryon-picker">
         <p className="tryon-picker__label">Select an accessory</p>
         <div className="tryon-rail" role="listbox" aria-label="Accessories">
-          {PRODUCTS.map((product) => {
+          {catalog.map((product) => {
             const selected = activeProduct.id === product.id;
             return (
               <button
@@ -297,10 +303,15 @@ export function TryOnViewer({ activeProduct, onProductChange }: TryOnViewerProps
             );
           })}
         </div>
-        {(activeProduct.type === 'ring' && RING_VARIANTS.length > 1) ||
-        (activeProduct.type === 'glasses' && GLASSES_VARIANTS.length > 1) ||
-        (activeProduct.type === 'watch' && WATCH_VARIANTS.length > 1) ||
-        (activeProduct.type === 'necklace' && NECKLACE_VARIANTS.length > 1) ? (
+        {products ? (
+          <p className="tryon-picker__meta">
+            {activeProduct.name}
+            {activeProduct.price ? ` · ${activeProduct.price}` : ''}
+          </p>
+        ) : (activeProduct.type === 'ring' && RING_VARIANTS.length > 1) ||
+          (activeProduct.type === 'glasses' && GLASSES_VARIANTS.length > 1) ||
+          (activeProduct.type === 'watch' && WATCH_VARIANTS.length > 1) ||
+          (activeProduct.type === 'necklace' && NECKLACE_VARIANTS.length > 1) ? (
           <p className="tryon-picker__meta">{activeProduct.name}</p>
         ) : null}
       </div>

@@ -6,6 +6,8 @@ import {
 } from '../api';
 import { Card, CopyBox, ErrorNote, Field, InvoiceBadge, Shell, StatusBadge, useAction } from '../ui';
 import { adminNav } from './AdminHome';
+import { ProductsCard } from '../Products';
+import { Link } from 'react-router-dom';
 
 interface Data {
   company: Company;
@@ -154,6 +156,8 @@ export function AdminClient() {
         </div>
       </div>
 
+      {plan && <ProductsCard companyId={id} limit={plan.product_limit} />}
+
       <Card title="Invoices">
         {invoices.length === 0 ? (
           <p className="sa-muted">No invoices yet.</p>
@@ -163,7 +167,7 @@ export function AdminClient() {
             <tbody>
               {invoices.map((inv) => (
                 <tr key={inv.id}>
-                  <td>{inv.number}<div className="sa-sub">{day(inv.created_at)}</div></td>
+                  <td><Link to={`/admin/invoices/${inv.id}`}>{inv.number}</Link><div className="sa-sub">{day(inv.created_at)}</div></td>
                   <td>{(inv.invoice_items ?? []).map((it) => (<div key={it.id} className="sa-sub">{it.description}: {money(it.amount, inv.currency)}</div>))}</td>
                   <td>{money(inv.total, inv.currency)}</td>
                   <td><InvoiceBadge status={inv.status} />{inv.attempts > 0 && inv.status !== 'paid' && <div className="sa-sub">{inv.attempts} attempt{inv.attempts === 1 ? '' : 's'}</div>}</td>

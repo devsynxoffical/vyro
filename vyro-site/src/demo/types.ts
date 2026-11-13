@@ -8,6 +8,18 @@ export interface Product {
   image: string;
   price: string;
   description: string;
+  /** How to draw a necklace that is not one of the built-in demo styles */
+  necklace?: NecklaceOptions;
+}
+
+/** A necklace is rendered as a 3D strand; the product image is its pendant. */
+export interface NecklaceOptions {
+  kind: 'chain' | 'pearls';
+  chainColor?: 'gold' | 'silver';
+  lengthCm?: number;
+  pearlMm?: number;
+  /** Real height of the pendant in millimetres (chains only) */
+  pendantMm?: number;
 }
 
 export interface ProductCategory {
