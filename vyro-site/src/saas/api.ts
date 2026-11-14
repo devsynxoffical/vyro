@@ -171,3 +171,25 @@ export function isLive(s: Subscription | null | undefined): boolean {
   if (s.status === 'past_due') return !!s.grace_until && new Date(s.grace_until) > new Date();
   return false;
 }
+
+/** "3h ago", "2d ago", then a date. */
+export function ago(iso: string): string {
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`;
+  if (mins < 60 * 24 * 7) return `${Math.round(mins / 1440)}d ago`;
+  return day(iso);
+}
+
+/** Amount without the currency, for columns and figures that label it separately. */
+export function amount(value: number | string): string {
+  return Number(value).toLocaleString('en-GB', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+}
+
+export function noticeTone(kind: string): 'bad' | 'ok' | 'warn' | undefined {
+  if (/failed|suspended|refund_needed/.test(kind)) return 'bad';
+  if (/cancel/.test(kind)) return 'warn';
+  if (/succeeded|reactivated|registered/.test(kind)) return 'ok';
+  return undefined;
+}

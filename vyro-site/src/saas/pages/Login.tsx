@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../api';
 import { useAuth } from '../auth';
-import { ErrorNote, Field, useAction } from '../ui';
+import { Button, ErrorNote, Field, Notice, useAction } from '../ui';
+import { AuthLayout } from './AuthLayout';
 
 export function Login() {
   const { session, profile, needsSecondStep, loading, refresh } = useAuth();
@@ -48,57 +49,48 @@ export function Login() {
       setResetSent(true);
     });
 
+  if (session && needsSecondStep) {
+    return (
+      <AuthLayout>
+        <h1>Two-step login</h1>
+        <p>Enter the 6-digit code from your authenticator app.</p>
+        <form onSubmit={verify} className="vy-form">
+          <Field label="Code">
+            <input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} autoFocus required />
+          </Field>
+          <ErrorNote message={error} />
+          <Button type="submit" variant="primary" busy={busy} block>
+            Verify
+          </Button>
+          <button type="button" className="vy-link" onClick={() => void supabase.auth.signOut()}>
+            Use a different account
+          </button>
+        </form>
+      </AuthLayout>
+    );
+  }
+
   return (
-    <div className="sa sa-auth">
-      <form className="sa-card sa-auth__card" onSubmit={session && needsSecondStep ? verify : signIn}>
-        <h1>VYRO</h1>
-        {session && needsSecondStep ? (
-          <>
-            <p className="sa-muted">Enter the 6-digit code from your authenticator app.</p>
-            <Field label="Code">
-              <input
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                autoFocus
-                required
-              />
-            </Field>
-            <ErrorNote message={error} />
-            <button className="sa-btn" disabled={busy}>
-              {busy ? 'Checking…' : 'Verify'}
-            </button>
-            <button type="button" className="sa-link" onClick={() => void supabase.auth.signOut()}>
-              Use a different account
-            </button>
-          </>
-        ) : (
-          <>
-            <p className="sa-muted">Sign in to your dashboard.</p>
-            <Field label="Email">
-              <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            </Field>
-            <Field label="Password">
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </Field>
-            <ErrorNote message={error} />
-            {resetSent && <p className="sa-ok">If that email has an account, a reset link is on its way.</p>}
-            <button className="sa-btn" disabled={busy}>
-              {busy ? 'Signing in…' : 'Sign in'}
-            </button>
-            <button type="button" className="sa-link" onClick={reset}>
-              Forgot password?
-            </button>
-          </>
-        )}
+    <AuthLayout>
+      <h1>Sign in</h1>
+      <p>Welcome back. Enter your details to open your console.</p>
+      <form onSubmit={signIn} className="vy-form">
+        <Field label="Email">
+          <input type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </Field>
+        <Field label="Password">
+          <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        </Field>
+        <ErrorNote message={error} />
+        {resetSent && <Notice tone="ok" title="Check your inbox">If that email has an account, a reset link is on its way.</Notice>}
+        <Button type="submit" variant="primary" busy={busy} block>
+          Sign in
+        </Button>
+        <button type="button" className="vy-link" style={{ justifySelf: 'start' }} onClick={reset}>
+          Forgot password?
+        </button>
       </form>
-    </div>
+      <p className="vy-small">New client? Accounts are created from the registration link VYRO sends you.</p>
+    </AuthLayout>
   );
 }

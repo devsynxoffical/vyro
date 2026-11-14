@@ -1,40 +1,64 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
+import '@fontsource-variable/bricolage-grotesque/wght.css';
+import '@fontsource/ibm-plex-sans/latin-400.css';
+import '@fontsource/ibm-plex-sans/latin-500.css';
+import '@fontsource/ibm-plex-sans/latin-600.css';
+import '@fontsource/ibm-plex-mono/latin-400.css';
+import '@fontsource/ibm-plex-mono/latin-500.css';
+import './styles/tokens.css';
+import './styles/console.css';
 import { configured } from './api';
 import { AuthProvider, RequireRole } from './auth';
+import { FeedbackProvider } from './ui';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
-import { BillingReturn, Portal } from './pages/Portal';
-import { AdminHome, AdminNewClient } from './pages/AdminHome';
-import { AdminClient } from './pages/AdminClient';
-import { AdminSettings } from './pages/AdminSettings';
 import { InvoicePage } from './pages/InvoicePage';
-import './saas.css';
+import { PortalLayout } from './pages/portal/PortalLayout';
+import { BillingReturn, PortalBilling, PortalCompany, PortalOverview, PortalProducts } from './pages/portal/PortalPages';
+import { AdminClients, AdminInvoices, AdminLayout, AdminNewClient, AdminOverview } from './pages/admin/AdminPages';
+import { AdminClient } from './pages/admin/AdminClient';
+import { AdminSettings } from './pages/admin/AdminSettings';
 
-/** Client portal and admin dashboard. Loaded on demand, separate from the marketing site. */
+/** Client portal and admin console. Loaded on demand, separate from the marketing site. */
 export default function SaasApp() {
   if (!configured) {
     return (
-      <div className="sa sa-center">
-        The dashboard is not connected yet: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (see platform/README.md).
+      <div className="vy vy-fullstate">
+        The console is not connected yet: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (see platform/README.md).
       </div>
     );
   }
   return (
     <AuthProvider>
-      <Routes>
-        <Route path="login" element={<Login />} />
-        <Route path="register" element={<Register />} />
-        <Route path="portal" element={<RequireRole role="client"><Portal /></RequireRole>} />
-        <Route path="portal/billing" element={<Navigate to="/portal" replace />} />
-        <Route path="portal/billing/return" element={<RequireRole role="client"><BillingReturn /></RequireRole>} />
-        <Route path="portal/invoices/:id" element={<RequireRole role="client"><InvoicePage /></RequireRole>} />
-        <Route path="admin/invoices/:id" element={<RequireRole role="admin"><InvoicePage /></RequireRole>} />
-        <Route path="admin" element={<RequireRole role="admin"><AdminHome /></RequireRole>} />
-        <Route path="admin/new" element={<RequireRole role="admin"><AdminNewClient /></RequireRole>} />
-        <Route path="admin/clients/:id" element={<RequireRole role="admin"><AdminClient /></RequireRole>} />
-        <Route path="admin/settings" element={<RequireRole role="admin"><AdminSettings /></RequireRole>} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <FeedbackProvider>
+        <Routes>
+          <Route path="login" element={<Login />} />
+          <Route path="register" element={<Register />} />
+
+          <Route path="portal/billing/return" element={<RequireRole role="client"><BillingReturn /></RequireRole>} />
+          <Route path="portal" element={<RequireRole role="client"><PortalLayout /></RequireRole>}>
+            <Route index element={<PortalOverview />} />
+            <Route path="billing" element={<PortalBilling />} />
+            <Route path="products" element={<PortalProducts />} />
+            <Route path="company" element={<PortalCompany />} />
+            <Route path="invoices/:id" element={<InvoicePage />} />
+          </Route>
+
+          <Route path="admin" element={<RequireRole role="admin"><AdminLayout /></RequireRole>}>
+            <Route index element={<AdminOverview />} />
+            <Route path="clients" element={<AdminClients />} />
+            <Route path="clients/new" element={<AdminNewClient />} />
+            <Route path="clients/:id" element={<AdminClient />} />
+            <Route path="invoices" element={<AdminInvoices />} />
+            <Route path="invoices/:id" element={<InvoicePage />} />
+            <Route path="settings" element={<AdminSettings />} />
+            {/* old address */}
+            <Route path="new" element={<Navigate to="/admin/clients/new" replace />} />
+          </Route>
+
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </FeedbackProvider>
     </AuthProvider>
   );
 }

@@ -1,0 +1,166 @@
+/*
+ * VYRO console design tokens. Every colour, size, radius, shadow and motion
+ * value used by the console comes from here; components never invent their own.
+ *
+ * Identity: warm paper and ink with a single petrol accent. Bricolage Grotesque
+ * for titles and figures, IBM Plex Sans for the interface, IBM Plex Mono for
+ * references and money columns (a ledger, not a toy).
+ */
+.vy {
+  /* Surfaces, lightest to deepest */
+  --paper: #f5f3ee;
+  --surface: #ffffff;
+  --surface-2: #faf9f5;
+  --sunken: #edeae2;
+  --line: #e2ded4;
+  --line-strong: #cbc6b8;
+
+  /* Ink */
+  --ink: #17150f;
+  --ink-2: #48443a;
+  --ink-3: #6c675b;
+  --ink-inverse: #f5f3ee;
+
+  /* The rail keeps its ink identity in both themes */
+  --rail: #17150f;
+  --rail-line: #2c2921;
+  --rail-ink: #f5f3ee;
+  --rail-ink-2: #a39d8e;
+  --rail-active: #2a2720;
+
+  /* Accent: petrol. Used for focus, links, active markers, charts. */
+  --accent: #0d5a6b;
+  --accent-hover: #0a4856;
+  --accent-ink: #ffffff;
+  --accent-soft: #dcecee;
+
+  /* Semantic */
+  --ok: #17713f;
+  --ok-soft: #dcf0e3;
+  --warn: #8f5200;
+  --warn-soft: #faeaca;
+  --bad: #b42318;
+  --bad-soft: #fbe3df;
+  --idle: #5c574c;
+  --idle-soft: #e9e6de;
+
+  /* Type */
+  --font-display: 'Bricolage Grotesque Variable', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --t-display: 600 28px/1.15 var(--font-display);
+  --t-title: 600 21px/1.25 var(--font-display);
+  --t-metric: 600 27px/1.1 var(--font-display);
+  --t-heading: 600 14.5px/1.35 var(--font-ui);
+  --t-body: 400 14px/1.5 var(--font-ui);
+  --t-small: 400 13px/1.45 var(--font-ui);
+  --t-label: 500 11.5px/1.3 var(--font-ui);
+  --t-mono: 400 13px/1.4 var(--font-mono);
+
+  /* Space: 4px base */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  /* Shape */
+  --r1: 4px;
+  --r2: 6px;
+  --r3: 10px;
+  --control-h: 36px;
+  --control-h-sm: 30px;
+
+  /* Elevation */
+  --shadow-1: 0 1px 0 rgba(23, 21, 15, 0.04);
+  --shadow-2: 0 8px 24px -6px rgba(23, 21, 15, 0.16), 0 2px 6px rgba(23, 21, 15, 0.06);
+  --shadow-3: 0 24px 60px -12px rgba(23, 21, 15, 0.32), 0 6px 16px rgba(23, 21, 15, 0.1);
+  --scrim: rgba(23, 21, 15, 0.42);
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --fast: 120ms;
+  --med: 200ms;
+  --slow: 320ms;
+
+  /* Layout */
+  --rail-w: 232px;
+  --rail-w-compact: 64px;
+  --topbar-h: 56px;
+  --tabbar-h: 60px;
+  --page-max: 1320px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  .vy {
+    --paper: #121110;
+    --surface: #1b1a17;
+    --surface-2: #201f1b;
+    --sunken: #0c0b0a;
+    --line: #2d2b26;
+    --line-strong: #45423a;
+
+    --ink: #f1eee6;
+    --ink-2: #c6c1b4;
+    --ink-3: #979184;
+    --ink-inverse: #17150f;
+
+    --rail: #0c0b0a;
+    --rail-line: #24221e;
+    --rail-active: #1f1d19;
+
+    --accent: #63c3d6;
+    --accent-hover: #86d3e2;
+    --accent-ink: #06222a;
+    --accent-soft: #12313a;
+
+    --ok: #5fd193;
+    --ok-soft: #12301f;
+    --warn: #f0b755;
+    --warn-soft: #3a2b0c;
+    --bad: #ff8d80;
+    --bad-soft: #3f1814;
+    --idle: #aaa496;
+    --idle-soft: #2a2823;
+
+    --shadow-1: 0 1px 0 rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 8px 24px -6px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+    --shadow-3: 0 24px 60px -12px rgba(0, 0, 0, 0.75), 0 6px 16px rgba(0, 0, 0, 0.5);
+    --scrim: rgba(0, 0, 0, 0.62);
+
+    color-scheme: dark;
+  }
+}
+
+/* Phones: slightly larger controls and text for touch */
+@media (max-width: 640px) {
+  .vy {
+    --control-h: 44px;
+    --control-h-sm: 36px;
+    --t-body: 400 15px/1.5 var(--font-ui);
+    --t-display: 600 24px/1.15 var(--font-display);
+    --t-title: 600 19px/1.25 var(--font-display);
+    --t-metric: 600 24px/1.1 var(--font-display);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vy {
+    --fast: 0ms;
+    --med: 0ms;
+    --slow: 0ms;
+  }
+  .vy *,
+  .vy *::before,
+  .vy *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

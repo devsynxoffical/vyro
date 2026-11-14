@@ -80,9 +80,9 @@ export function useAuth(): AuthState {
 export function RequireRole({ role, children }: { role: 'admin' | 'client'; children: ReactNode }) {
   const { loading, session, profile, needsSecondStep } = useAuth();
   const location = useLocation();
-  if (loading) return <div className="sa sa-center">Loading…</div>;
+  if (loading) return <div className="vy vy-fullstate">Loading…</div>;
   if (!session || needsSecondStep) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
-  if (!profile) return <div className="sa sa-center">This account has no access. Contact VYRO support.</div>;
+  if (!profile) return <div className="vy vy-fullstate">This account has no access. Contact VYRO support.</div>;
   if (profile.role !== role) return <Navigate to={profile.role === 'admin' ? '/admin' : '/portal'} replace />;
   return <>{children}</>;
 }

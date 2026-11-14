@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { Package, Plus, Trash2 } from 'lucide-react';
 import { supabase } from './api';
-import { Card, ErrorNote, Field, useAction } from './ui';
+import {
+  Button, Dialog, Empty, ErrorNote, Field, Meter, Panel, SkeletonRows, Status, useAction, useAsk,
+} from './ui';
 
 type ProductType = 'ring' | 'watch' | 'glasses' | 'necklace';
 
@@ -40,10 +43,19 @@ function friendly(message: string): string {
 }
 
 /** A client's try-on catalogue. Used on the client portal and on the admin client page. */
-export function ProductsCard({ companyId, limit }: { companyId: string; limit: number }) {
+export function ProductsPanel({
+  companyId,
+  limit,
+  onChange,
+}: {
+  companyId: string;
+  limit: number;
+  onChange?: () => void;
+}) {
   const [rows, setRows] = useState<ProductRow[] | null>(null);
   const [adding, setAdding] = useState(false);
-  const { busy, error, run, setError } = useAction();
+  const { busy, error, run } = useAction();
+  const ask = useAsk();
 
   const reload = useCallback(() => {
     void supabase
@@ -56,98 +68,142 @@ export function ProductsCard({ companyId, limit }: { companyId: string; limit: n
   }, [companyId]);
   useEffect(reload, [reload]);
 
+  const changed = () => {
+    reload();
+    onChange?.();
+  };
   const live = (rows ?? []).filter((r) => r.active).length;
+  const sample = rows?.find((r) => r.sku)?.sku;
 
   const toggle = (row: ProductRow) =>
-    void run(async () => {
-      const { error: err } = await supabase.from('products').update({ active: !row.active }).eq('id', row.id);
-      if (err) throw new Error(friendly(err.message));
-      reload();
-    });
+    void run(
+      async () => {
+        const { error: err } = await supabase.from('products').update({ active: !row.active }).eq('id', row.id);
+        if (err) throw new Error(friendly(err.message));
+        changed();
+      },
+      row.active ? 'Product switched off' : 'Product is live',
+    );
 
-  const remove = (row: ProductRow) => {
-    if (!window.confirm(`Delete “${row.name}”? It disappears from your website’s try-on.`)) return;
+  const remove = async (row: ProductRow) => {
+    const ok = await ask({
+      title: `Delete “${row.name}”?`,
+      body: 'It disappears from the try-on on your website straight away. This cannot be undone.',
+      confirmLabel: 'Delete product',
+      danger: true,
+    });
+    if (!ok) return;
     void run(async () => {
       const { error: err } = await supabase.from('products').delete().eq('id', row.id);
       if (err) throw new Error('Could not delete the product.');
       await supabase.storage.from('products').remove([row.image_path]);
-      reload();
-    });
+      changed();
+    }, 'Product deleted');
   };
 
   return (
-    <Card
-      title={`Try-on products (${live} of ${limit} live)`}
-      action={
-        !adding && (
-          <button className="sa-btn sa-btn--small" onClick={() => { setError(null); setAdding(true); }}>
-            Add product
-          </button>
-        )
-      }
-    >
-      <ErrorNote message={error} />
-      {adding && (
+    <>
+      <Panel
+        flush
+        title="Catalogue"
+        description={
+          <span className="vy-num">
+            {live} of {limit} live
+          </span>
+        }
+        action={
+          <div className="vy-actions">
+            <div style={{ width: 96 }}>
+              <Meter value={live} max={limit} />
+            </div>
+            <Button variant="primary" size="sm" icon={<Plus />} onClick={() => setAdding(true)}>
+              Add product
+            </Button>
+          </div>
+        }
+        foot={
+          sample ? (
+            <p className="vy-small vy-muted">
+              Open one product from its own page by giving any button its product code:{' '}
+              <code>&lt;button data-vyro-open="{sample}"&gt;Try it on&lt;/button&gt;</code>
+            </p>
+          ) : undefined
+        }
+      >
+        {error && (
+          <div style={{ padding: 16 }}>
+            <ErrorNote message={error} />
+          </div>
+        )}
+        {rows === null ? (
+          <SkeletonRows />
+        ) : rows.length === 0 ? (
+          <Empty
+            icon={<Package />}
+            title="No products yet"
+            action={
+              <Button variant="primary" icon={<Plus />} onClick={() => setAdding(true)}>
+                Add your first product
+              </Button>
+            }
+          >
+            Add the rings, watches, glasses and necklaces your customers can try on.
+          </Empty>
+        ) : (
+          <div className="vy-table-wrap">
+            <table className="vy-table vy-table--stack vy-table--hover">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Type</th>
+                  <th>Code</th>
+                  <th>Price</th>
+                  <th>Website</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id}>
+                    <td className="is-primary">
+                      <div className="vy-cell">
+                        <img className="vy-thumb" src={imageUrl(r.image_path)} alt="" loading="lazy" />
+                        <strong>{r.name}</strong>
+                      </div>
+                    </td>
+                    <td data-label="Type">{TYPE_LABEL[r.type]}</td>
+                    <td data-label="Code" className="vy-mono">
+                      {r.sku ?? '—'}
+                    </td>
+                    <td data-label="Price">{r.price ?? '—'}</td>
+                    <td className="is-aside">
+                      <Status tone={r.active ? 'ok' : 'idle'}>{r.active ? 'Live' : 'Off'}</Status>
+                    </td>
+                    <td className="is-actions">
+                      <Button size="sm" disabled={busy} onClick={() => toggle(r)}>
+                        {r.active ? 'Switch off' : 'Switch on'}
+                      </Button>
+                      <Button size="sm" variant="ghost" disabled={busy} aria-label={`Delete ${r.name}`} icon={<Trash2 />} onClick={() => void remove(r)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      <Dialog drawer open={adding} onClose={() => setAdding(false)} title="Add product">
         <ProductForm
           companyId={companyId}
           full={live >= limit}
           onDone={(saved) => {
             setAdding(false);
-            if (saved) reload();
+            if (saved) changed();
           }}
         />
-      )}
-      {rows === null ? (
-        <p className="sa-muted">Loading…</p>
-      ) : rows.length === 0 ? (
-        !adding && <p className="sa-muted">No products yet. Add the products your customers can try on.</p>
-      ) : (
-        <table className="sa-table">
-          <thead>
-            <tr>
-              <th>Product</th>
-              <th>Type</th>
-              <th>Code</th>
-              <th>Price</th>
-              <th>On website</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <span className="sa-company">
-                    <img className="sa-thumb" src={imageUrl(r.image_path)} alt="" />
-                    {r.name}
-                  </span>
-                </td>
-                <td>{TYPE_LABEL[r.type]}</td>
-                <td>{r.sku ?? '—'}</td>
-                <td>{r.price ?? '—'}</td>
-                <td>
-                  <span className={`sa-badge sa-badge--${r.active ? 'good' : 'off'}`}>{r.active ? 'Live' : 'Off'}</span>
-                </td>
-                <td className="sa-right">
-                  <button className="sa-btn sa-btn--small sa-btn--ghost" disabled={busy} onClick={() => toggle(r)}>
-                    {r.active ? 'Switch off' : 'Switch on'}
-                  </button>{' '}
-                  <button className="sa-btn sa-btn--small sa-btn--danger" disabled={busy} onClick={() => remove(r)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {rows && rows.some((r) => r.sku) && (
-        <p className="sa-muted">
-          To open one product from its own page, give any button its product code:{' '}
-          <code>&lt;button data-vyro-open="{rows.find((r) => r.sku)!.sku}"&gt;Try it on&lt;/button&gt;</code>
-        </p>
-      )}
-    </Card>
+      </Dialog>
+    </>
   );
 }
 
@@ -201,12 +257,12 @@ function ProductForm({
         throw new Error(friendly(err.message));
       }
       onDone(true);
-    });
+    }, 'Product added');
   };
 
   return (
-    <form onSubmit={save} className="sa-subform">
-      <div className="sa-grid2">
+    <form onSubmit={save} className="vy-form">
+      <div className="vy-grid2">
         <Field label="Type">
           <select value={type} onChange={(e) => setType(e.target.value as ProductType)}>
             {(Object.keys(TYPE_LABEL) as ProductType[]).map((t) => (
@@ -227,7 +283,7 @@ function ProductForm({
         </Field>
       </div>
       {type === 'necklace' && (
-        <div className="sa-grid2">
+        <div className="vy-grid2">
           <Field label="Necklace style">
             <select value={kind} onChange={(e) => setKind(e.target.value as 'chain' | 'pearls')}>
               <option value="chain">Chain with pendant</option>
@@ -255,15 +311,13 @@ function ProductForm({
       <Field label="Image" hint={`PNG or WebP with a transparent background, up to 2 MB. ${IMAGE_HINT[type]}`}>
         <input type="file" accept="image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} required />
       </Field>
-      {full && <p className="sa-muted">Your plan’s live products are all used, so this one is saved switched off.</p>}
+      {full && <p className="vy-small vy-muted">Your plan’s live products are all used, so this one is saved switched off.</p>}
       <ErrorNote message={error} />
-      <div className="sa-actions">
-        <button className="sa-btn" disabled={busy}>
-          {busy ? 'Saving…' : 'Save product'}
-        </button>
-        <button type="button" className="sa-btn sa-btn--ghost" onClick={() => onDone(false)}>
-          Cancel
-        </button>
+      <div className="vy-actions vy-actions--end">
+        <Button onClick={() => onDone(false)}>Cancel</Button>
+        <Button type="submit" variant="primary" busy={busy}>
+          Save product
+        </Button>
       </div>
     </form>
   );

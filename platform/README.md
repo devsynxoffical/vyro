@@ -13,7 +13,7 @@ vyro-site/src/widget/loader.js the script clients install (/vyro.js)
 
 ## How it works
 
-1. **Admin creates a client** (`/admin/new`): company, custom setup fee, monthly or
+1. **Admin creates a client** (`/admin/clients/new`): company, custom setup fee, monthly or
    yearly price, products included, optional first billing date and contract.
    A one-time registration link is produced.
 2. **Client registers** with that link (company details, logo, password) and pays
@@ -145,6 +145,22 @@ top to bottom; glasses from the front; for a necklace upload the pendant only
 VAT is not calculated: if VYRO is VAT-registered, prices entered are treated as
 final amounts and the invoice shows no tax line. Add this before invoicing
 VAT-registered clients.
+
+## Console design system
+
+The portal and admin console share one design system in `vyro-site/src/saas`:
+
+- `styles/tokens.css`: every colour, type size, spacing step, radius, shadow
+  and motion value (light and dark). Change the look here, not in pages.
+- `styles/console.css`: the components (shell, tables, forms, dialogs, charts).
+- `ui.tsx`: the React components; `shell.tsx`: rail, top bar, search,
+  notifications and the phone tab bar.
+
+Screens: client `/portal` (overview), `/portal/billing`, `/portal/products`,
+`/portal/company`; admin `/admin` (overview), `/admin/clients`,
+`/admin/clients/new`, `/admin/clients/:id` (tabs), `/admin/invoices`,
+`/admin/settings`. Fonts (Bricolage Grotesque, IBM Plex Sans/Mono) are bundled
+with the app; nothing is loaded from a font CDN.
 
 ## Not built yet
 
