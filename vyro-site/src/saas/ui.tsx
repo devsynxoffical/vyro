@@ -485,7 +485,7 @@ export interface Bar {
 export function BarChart({ bars, label }: { bars: Bar[]; label: string }) {
   const peak = Math.max(1, ...bars.map((b) => b.value));
   return (
-    <figure style={{ margin: 0 }} aria-label={label}>
+    <figure className="vy-chart-fig" aria-label={label}>
       <div className="vy-chart">
         {bars.map((b, i) => (
           <div key={b.label + i} className={`vy-chart__col ${b.current ? 'is-current' : ''}`} tabIndex={0}>

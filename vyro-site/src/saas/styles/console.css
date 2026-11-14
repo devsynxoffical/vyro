@@ -115,6 +115,12 @@
   font: 700 17px/1 var(--font-display);
   letter-spacing: 0.08em;
 }
+.vy-brandmark {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 .vy-topbar__crumbs {
   display: none;
   align-items: center;
@@ -189,7 +195,7 @@
   top: 0;
   width: 28px;
   height: 2px;
-  background: var(--rail-ink);
+  background: var(--grad);
   border-radius: 0 0 2px 2px;
 }
 
@@ -264,7 +270,7 @@
     bottom: 9px;
     width: 3px;
     border-radius: 0 3px 3px 0;
-    background: var(--rail-ink);
+    background: var(--grad);
   }
   .vy-rail__foot {
     margin-top: auto;
@@ -470,6 +476,8 @@
     background var(--fast) var(--ease),
     border-color var(--fast) var(--ease),
     color var(--fast) var(--ease),
+    box-shadow var(--med) var(--ease),
+    background-position var(--slow) var(--ease),
     transform var(--fast) var(--ease);
 }
 .vy-btn svg {
@@ -485,11 +493,15 @@
   cursor: not-allowed;
 }
 .vy-btn--primary {
-  background: var(--ink);
+  background: var(--grad);
+  background-size: 160% 160%;
+  background-position: 0% 50%;
   color: var(--ink-inverse);
+  font-weight: 600;
 }
 .vy-btn--primary:hover:not(:disabled) {
-  background: var(--ink-2);
+  background-position: 100% 50%;
+  box-shadow: 0 6px 22px -8px var(--violet);
 }
 .vy-btn--secondary {
   background: var(--surface);
@@ -616,8 +628,8 @@
 .vy-field select:focus,
 .vy-field textarea:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent-solid);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 30%, transparent);
 }
 .vy-field input::placeholder,
 .vy-input::placeholder {
@@ -1053,8 +1065,8 @@
 }
 .vy-search input:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent-solid);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 30%, transparent);
 }
 .vy-search kbd {
   position: absolute;
@@ -1108,7 +1120,7 @@
   right: var(--s3);
   bottom: -1px;
   height: 2px;
-  background: var(--ink);
+  background: var(--grad);
 }
 .vy-count {
   font: 500 11px/1 var(--font-mono);
@@ -1351,18 +1363,18 @@
   width: 100%;
   max-width: 44px;
   min-height: 2px;
-  border-radius: 3px 3px 0 0;
-  background: var(--ink);
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--violet) 55%, var(--surface));
   transform-origin: bottom;
   animation: vy-grow var(--slow) var(--ease) both;
   transition: background var(--fast) var(--ease);
 }
 .vy-chart__col.is-current .vy-chart__bar {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--pink), var(--violet));
 }
 .vy-chart__col:hover .vy-chart__bar,
 .vy-chart__col:focus-visible .vy-chart__bar {
-  background: var(--accent);
+  background: var(--violet);
 }
 @keyframes vy-grow {
   from {
@@ -1431,7 +1443,7 @@
 .vy-meter > span {
   display: block;
   height: 100%;
-  background: var(--ink);
+  background: var(--grad);
   border-radius: 3px;
   transition: width var(--slow) var(--ease);
 }
@@ -1933,6 +1945,7 @@
     grid-template-columns: minmax(360px, 5fr) 7fr;
   }
   .vy-auth__brand {
+    border-right: 1px solid var(--line);
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -1943,15 +1956,14 @@
     overflow: hidden;
   }
   .vy-auth__brand::after {
-    /* a faint measuring grid: the product is about fit and precision */
+    /* the website's soft brand glow */
     content: '';
     position: absolute;
     inset: 0;
-    background-image: linear-gradient(var(--rail-line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--rail-line) 1px, transparent 1px);
-    background-size: 56px 56px;
-    mask-image: radial-gradient(120% 90% at 0% 100%, #000 0%, transparent 70%);
-    opacity: 0.9;
+    background:
+      radial-gradient(60% 50% at 10% 100%, color-mix(in srgb, var(--violet) 38%, transparent), transparent 70%),
+      radial-gradient(50% 40% at 90% 0%, color-mix(in srgb, var(--pink) 22%, transparent), transparent 70%),
+      radial-gradient(45% 40% at 85% 95%, color-mix(in srgb, var(--blue) 20%, transparent), transparent 70%);
   }
   .vy-auth__brand > * {
     position: relative;
@@ -2160,4 +2172,18 @@
 .vy-table .vy-mono,
 .vy-facts .vy-mono {
   white-space: nowrap;
+}
+
+/* Chart tooltips may never widen the page on narrow screens */
+.vy-chart-fig {
+  margin: 0;
+  overflow-x: clip;
+}
+@media (max-width: 640px) {
+  .vy-chart__tip {
+    white-space: normal;
+    width: max-content;
+    max-width: 44vw;
+    text-align: center;
+  }
 }

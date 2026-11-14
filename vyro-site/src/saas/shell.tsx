@@ -69,7 +69,7 @@ export function AppShell({
       <div className="vy vy-shell">
         <aside className="vy-rail">
           <Link to={nav[0].to} className="vy-rail__brand">
-            VYRO <small>{section}</small>
+            <span className="vy-brandmark">VYRO</span> <small>{section}</small>
           </Link>
           <div>
             <div className="vy-rail__section">Workspace</div>
@@ -102,7 +102,7 @@ export function AppShell({
 
         <div className="vy-work">
           <header className="vy-topbar">
-            <Link to={nav[0].to} className="vy-topbar__brand">
+            <Link to={nav[0].to} className="vy-topbar__brand vy-brandmark">
               VYRO
             </Link>
             <nav className="vy-topbar__crumbs" aria-label="Breadcrumb">

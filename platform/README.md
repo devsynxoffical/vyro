@@ -159,8 +159,9 @@ The portal and admin console share one design system in `vyro-site/src/saas`:
 Screens: client `/portal` (overview), `/portal/billing`, `/portal/products`,
 `/portal/company`; admin `/admin` (overview), `/admin/clients`,
 `/admin/clients/new`, `/admin/clients/:id` (tabs), `/admin/invoices`,
-`/admin/settings`. Fonts (Bricolage Grotesque, IBM Plex Sans/Mono) are bundled
-with the app; nothing is loaded from a font CDN.
+`/admin/settings`. The console uses the website's dark theme and brand
+gradient, and the same Google Fonts (Sora, Inter, IBM Plex Mono), loaded once
+in `vyro-site/index.html`.
 
 ## Not built yet
 

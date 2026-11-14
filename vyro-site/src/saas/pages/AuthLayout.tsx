@@ -5,7 +5,7 @@ export function AuthLayout({ wide, children }: { wide?: boolean; children: React
   return (
     <div className="vy vy-auth">
       <aside className="vy-auth__brand" aria-hidden>
-        <strong>VYRO</strong>
+        <strong className="vy-brandmark" style={{ alignSelf: 'flex-start' }}>VYRO</strong>
         <div>
           <h2>Try-on that sells, run from one place.</h2>
           <p>Your subscription, invoices, products and website widget in a single console.</p>
@@ -14,7 +14,7 @@ export function AuthLayout({ wide, children }: { wide?: boolean; children: React
       </aside>
       <main className="vy-auth__main">
         <div className={`vy-auth__form ${wide ? 'vy-auth__form--wide' : ''}`}>
-          <div className="vy-auth__mark">VYRO</div>
+          <div className="vy-auth__mark vy-brandmark" style={{ justifySelf: 'start' }}>VYRO</div>
           {children}
         </div>
       </main>
