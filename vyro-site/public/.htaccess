@@ -1,0 +1,16 @@
+# Single-page app: any address that is not a real file is served by index.html,
+# so /try-on, /login, /portal, /admin and /embed work on refresh and direct links.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# The loader on client websites must always be fresh.
+<IfModule mod_headers.c>
+  <Files "vyro.js">
+    Header set Cache-Control "public, max-age=300"
+  </Files>
+</IfModule>

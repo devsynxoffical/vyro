@@ -1,0 +1,61 @@
+# Builds the VYRO site and uploads it to the web host over FTPS.
+#
+# Needs these repository secrets (Settings → Secrets and variables → Actions):
+#   FTP_SERVER, FTP_USERNAME, FTP_PASSWORD
+# Optional repository variables for the dashboard:
+#   VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_INVOICE_FROM
+name: Deploy website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vyro-site/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-website
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vyro-site/package-lock.json
+
+      - name: Install
+        working-directory: vyro-site
+        run: npm ci
+
+      - name: Build
+        working-directory: vyro-site
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_INVOICE_FROM: ${{ vars.VITE_INVOICE_FROM }}
+        run: npm run build
+
+      - name: Upload over FTPS
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          local-dir: vyro-site/dist/
+          server-dir: ./
+          # Only files this workflow uploaded are ever replaced or removed;
+          # anything else already on the server is left alone.
+          dangerous-clean-slate: false
