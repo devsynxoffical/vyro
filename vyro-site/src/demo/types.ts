@@ -114,15 +114,6 @@ export const WATCH_VARIANTS: Product[] = [
     description: 'Stainless steel case, black sunburst dial, steel link bracelet',
   },
   {
-    id: 'watch-2',
-    name: 'Gold Dress Watch',
-    shortName: 'Gold & Leather',
-    type: 'watch',
-    image: '/products/watch-gold.webp',
-    price: '$429',
-    description: 'Gold case, ivory dial, brown leather strap',
-  },
-  {
     id: 'watch-3',
     name: 'Matte Black Watch',
     shortName: 'Matte Black',
