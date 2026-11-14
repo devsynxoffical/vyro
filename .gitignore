@@ -5,3 +5,8 @@ dist/
 *.tsbuildinfo
 .DS_Store
 **/.DS_Store
+
+# Server-side secrets and client uploads never go into git
+vyro-site/public/api/config.php
+vyro-site/public/uploads/*
+!vyro-site/public/uploads/.htaccess

@@ -1,0 +1,8 @@
+# Uploaded logos and product images. Nothing in here may ever run as code.
+<FilesMatch "\.(?i:php\d?|phtml|phar|pl|py|cgi|sh|htm|html|js|svg)$">
+  Require all denied
+</FilesMatch>
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Access-Control-Allow-Origin "*"
+</IfModule>

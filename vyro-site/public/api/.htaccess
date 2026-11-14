@@ -1,0 +1,14 @@
+# All /api/... requests go to the front controller.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(lib|schema)/ - [F,L]
+  RewriteRule ^config(\.sample)?\.php$ - [F,L]
+  RewriteRule ^index\.php$ - [L]
+  RewriteRule ^ index.php [L]
+</IfModule>
+
+# Pass the Authorization-style headers PHP needs on CGI/FastCGI hosts.
+<IfModule mod_setenvif.c>
+  SetEnvIf X-Csrf-Token "(.+)" HTTP_X_CSRF_TOKEN=$1
+  SetEnvIf X-Cron-Secret "(.+)" HTTP_X_CRON_SECRET=$1
+</IfModule>
