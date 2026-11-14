@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Package, Plus, Trash2 } from 'lucide-react';
-import { supabase } from './api';
+import { api, uploadUrl } from './api';
 import {
   Button, Dialog, Empty, ErrorNote, Field, Meter, Panel, SkeletonRows, Status, useAction, useAsk,
 } from './ui';
@@ -32,16 +32,6 @@ const IMAGE_HINT: Record<ProductType, string> = {
   necklace: 'The pendant only (the chain is drawn automatically). For pearls, any picture of the strand.',
 };
 
-const imageUrl = (path: string) => supabase.storage.from('products').getPublicUrl(path).data.publicUrl;
-
-function friendly(message: string): string {
-  if (message.includes('PRODUCT_LIMIT')) {
-    return 'Your plan’s product limit is reached. Switch another product off, or ask VYRO to add products to your plan.';
-  }
-  if (message.includes('products_sku')) return 'Another product already uses this product code.';
-  return 'Could not save the product. Please check the details and try again.';
-}
-
 /** A client's try-on catalogue. Used on the client portal and on the admin client page. */
 export function ProductsPanel({
   companyId,
@@ -58,13 +48,10 @@ export function ProductsPanel({
   const ask = useAsk();
 
   const reload = useCallback(() => {
-    void supabase
-      .from('products')
-      .select('id, type, name, sku, price, image_path, options, active')
-      .eq('company_id', companyId)
-      .order('sort')
-      .order('created_at')
-      .then(({ data }) => setRows((data ?? []) as ProductRow[]));
+    void api
+      .get<{ products: ProductRow[] }>(`products?company_id=${companyId}`)
+      .then(({ products }) => setRows(products))
+      .catch(() => setRows([]));
   }, [companyId]);
   useEffect(reload, [reload]);
 
@@ -78,8 +65,7 @@ export function ProductsPanel({
   const toggle = (row: ProductRow) =>
     void run(
       async () => {
-        const { error: err } = await supabase.from('products').update({ active: !row.active }).eq('id', row.id);
-        if (err) throw new Error(friendly(err.message));
+        await api.post('products/toggle', { id: row.id, company_id: companyId });
         changed();
       },
       row.active ? 'Product switched off' : 'Product is live',
@@ -94,9 +80,7 @@ export function ProductsPanel({
     });
     if (!ok) return;
     void run(async () => {
-      const { error: err } = await supabase.from('products').delete().eq('id', row.id);
-      if (err) throw new Error('Could not delete the product.');
-      await supabase.storage.from('products').remove([row.image_path]);
+      await api.post('products/delete', { id: row.id, company_id: companyId });
       changed();
     }, 'Product deleted');
   };
@@ -167,7 +151,7 @@ export function ProductsPanel({
                   <tr key={r.id}>
                     <td className="is-primary">
                       <div className="vy-cell">
-                        <img className="vy-thumb" src={imageUrl(r.image_path)} alt="" loading="lazy" />
+                        <img className="vy-thumb" src={uploadUrl(r.image_path) ?? ''} alt="" loading="lazy" />
                         <strong>{r.name}</strong>
                       </div>
                     </td>
@@ -235,27 +219,18 @@ function ProductForm({
         throw new Error('Use a PNG or WebP image with a transparent background.');
       }
       if (file.size > 2 * 1024 * 1024) throw new Error('The image must be smaller than 2 MB.');
-      const ext = file.type === 'image/webp' ? 'webp' : 'png';
-      const path = `${companyId}/${crypto.randomUUID()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('products').upload(path, file, { contentType: file.type });
-      if (upErr) throw new Error('Could not upload the image. Please try again.');
-      const { error: err } = await supabase.from('products').insert({
-        company_id: companyId,
-        type,
-        name: name.trim(),
-        sku: sku.trim() || null,
-        price: price.trim() || null,
-        image_path: path,
-        active: !full,
-        options:
-          type === 'necklace'
-            ? { kind, chainColor, lengthCm: Number(lengthCm) || 45, pendantMm: Number(pendantMm) || 15 }
-            : {},
-      });
-      if (err) {
-        await supabase.storage.from('products').remove([path]);
-        throw new Error(friendly(err.message));
+      const data = new FormData();
+      data.append('company_id', companyId);
+      data.append('type', type);
+      data.append('name', name.trim());
+      data.append('sku', sku.trim());
+      data.append('price', price.trim());
+      data.append('active', full ? '0' : '1');
+      data.append('file', file);
+      if (type === 'necklace') {
+        data.append('options', JSON.stringify({ kind, chainColor, lengthCm: Number(lengthCm) || 45, pendantMm: Number(pendantMm) || 15 }));
       }
+      await api.upload('products', data);
       onDone(true);
     }, 'Product added');
   };

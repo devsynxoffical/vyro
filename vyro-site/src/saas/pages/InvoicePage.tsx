@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Printer } from 'lucide-react';
-import { COMPANY_COLUMNS, day, money, supabase, type Company, type Invoice } from '../api';
+import { api, day, money, type Company, type Invoice } from '../api';
 import { useAuth } from '../auth';
 import { useCrumbs } from '../shell';
 import { Button, Empty, Facts, InvoiceStatus, SkeletonRows } from '../ui';
@@ -34,18 +34,14 @@ export function InvoicePage() {
   );
 
   useEffect(() => {
-    void (async () => {
-      const { data } = await supabase.from('invoices').select('*, invoice_items(id, description, amount)').eq('id', id).maybeSingle();
-      if (!data) return setMissing(true);
-      const invoice = data as Invoice;
-      setInv(invoice);
-      const [c, p] = await Promise.all([
-        supabase.from('companies').select(COMPANY_COLUMNS).eq('id', invoice.company_id).single(),
-        supabase.from('payments').select('id, flow, amount, card_brand, card_masked, updated_at').eq('invoice_id', id).eq('status', 'successful'),
-      ]);
-      setCompany(c.data as Company);
-      setPayments((p.data ?? []) as PaymentRow[]);
-    })();
+    api
+      .get<{ invoice: Invoice; company: Company; payments: PaymentRow[] }>(`invoice?id=${encodeURIComponent(id)}`)
+      .then((r) => {
+        setInv(r.invoice);
+        setCompany(r.company);
+        setPayments(r.payments);
+      })
+      .catch(() => setMissing(true));
   }, [id]);
 
   if (missing) return <Empty title="Invoice not found" />;

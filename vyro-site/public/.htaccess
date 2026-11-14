@@ -3,6 +3,8 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+  # The API and uploaded files are handled by their own folders.
+  RewriteRule ^(api|uploads)/ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule ^ index.html [L]
@@ -14,3 +16,8 @@
     Header set Cache-Control "public, max-age=300"
   </Files>
 </IfModule>
+
+# Deployment bookkeeping is not for visitors.
+<Files ".ftp-deploy-sync-state.json">
+  Require all denied
+</Files>

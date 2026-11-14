@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CircleCheck, LayoutDashboard, Plus, ReceiptText, Search, Settings, Users } from 'lucide-react';
 import {
-  ago, amount, callFn, COMPANY_COLUMNS, day, isLive, logoUrl, money, noticeTone, supabase,
+  ago, amount, api, day, isLive, logoUrl, money, noticeTone,
   type Company, type Invoice, type Notice, type Plan, type Subscription, type SubscriptionStatus,
 } from '../../api';
 import { AppShell, useCrumbs, type NavItem } from '../../shell';
@@ -24,24 +24,18 @@ export function AdminLayout() {
 
 export interface ClientRow {
   company: Company;
-  plan?: Plan;
-  sub?: Subscription;
+  plan?: Plan | null;
+  sub?: Subscription | null;
 }
 
 /** Every client with its current plan and subscription. */
 export function useClients(): ClientRow[] | null {
   const [rows, setRows] = useState<ClientRow[] | null>(null);
   useEffect(() => {
-    void (async () => {
-      const [c, p, s] = await Promise.all([
-        supabase.from('companies').select(COMPANY_COLUMNS).order('created_at', { ascending: false }),
-        supabase.from('plans').select('*').eq('active', true),
-        supabase.from('subscriptions').select('*'),
-      ]);
-      const plans = new Map(((p.data ?? []) as Plan[]).map((x) => [x.company_id, x]));
-      const subs = new Map(((s.data ?? []) as Subscription[]).map((x) => [x.company_id, x]));
-      setRows(((c.data ?? []) as Company[]).map((company) => ({ company, plan: plans.get(company.id), sub: subs.get(company.id) })));
-    })();
+    api
+      .get<{ clients: ClientRow[] }>('admin/clients')
+      .then(({ clients }) => setRows(clients))
+      .catch(() => setRows([]));
   }, []);
   return rows;
 }
@@ -58,16 +52,14 @@ export function AdminOverview() {
   const [revenue, setRevenue] = useState<{ month: string; collected: number; payments: number }[] | null>(null);
 
   useEffect(() => {
-    void (async () => {
-      const [f, n, r] = await Promise.all([
-        supabase.from('invoices').select('*').eq('status', 'failed').order('created_at', { ascending: false }),
-        supabase.from('notifications').select('*').eq('audience', 'admin').order('created_at', { ascending: false }).limit(8),
-        supabase.rpc('admin_revenue_by_month', { p_months: 6 }),
-      ]);
-      setFailed((f.data ?? []) as Invoice[]);
-      setNotices((n.data ?? []) as Notice[]);
-      setRevenue((r.data ?? []) as { month: string; collected: number; payments: number }[]);
-    })();
+    api
+      .get<{ failed: Invoice[]; notices: Notice[]; revenue: { month: string; collected: number; payments: number }[] }>('admin/overview')
+      .then((o) => {
+        setFailed(o.failed);
+        setNotices(o.notices);
+        setRevenue(o.revenue);
+      })
+      .catch(() => setRevenue([]));
   }, []);
 
   const stats = useMemo(() => {
@@ -422,8 +414,7 @@ export function AdminNewClient() {
     e.preventDefault();
     void run(async () => {
       setResult(
-        await callFn('admin-clients', {
-          action: 'create_client',
+        await api.post('admin/clients', {
           company: { name: f.name, contact_name: f.contact_name, contact_email: f.contact_email, contact_phone: f.contact_phone, website: f.website },
           plan: {
             setup_fee: f.setup_fee || 0, recurring_fee: f.recurring_fee, billing_interval: f.billing_interval,
@@ -572,14 +563,13 @@ export function AdminInvoices() {
   const [sort, setSort] = useState<SortState<InvSort>>({ key: 'date', dir: 'desc' });
 
   useEffect(() => {
-    void (async () => {
-      const [i, c] = await Promise.all([
-        supabase.from('invoices').select('*').neq('status', 'void').order('created_at', { ascending: false }).limit(500),
-        supabase.from('companies').select('id, name'),
-      ]);
-      setNames(new Map(((c.data ?? []) as { id: string; name: string }[]).map((x) => [x.id, x.name])));
-      setRows((i.data ?? []) as Invoice[]);
-    })();
+    api
+      .get<{ invoices: (Invoice & { company_name: string })[] }>('admin/invoices')
+      .then(({ invoices }) => {
+        setNames(new Map(invoices.map((i) => [i.company_id, i.company_name])));
+        setRows(invoices);
+      })
+      .catch(() => setRows([]));
   }, []);
 
   const is = (f: InvFilter, inv: Invoice) =>

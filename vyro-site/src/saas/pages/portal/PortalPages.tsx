@@ -1,9 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CircleAlert, CircleCheck, Circle, CreditCard, ReceiptText, ShieldCheck } from 'lucide-react';
-import {
-  amount, callFn, day, isLive, logoUrl, money, supabase, type Company, type Invoice,
-} from '../../api';
+import { amount, api, day, isLive, logoUrl, money, type Company, type Invoice } from '../../api';
 import { useCrumbs } from '../../shell';
 import {
   Avatar, Button, CodeBox, Empty, ErrorNote, Facts, Field, InvoiceStatus, Ledger, LiveStatus, Meter, Notice,
@@ -264,13 +262,13 @@ export function PortalBilling() {
     });
     if (!ok) return;
     void run(async () => {
-      await callFn('client-billing', { action: 'cancel' });
+      await api.post('billing/cancel');
       reload();
     }, 'Subscription cancelled');
   };
   const resume = () =>
     void run(async () => {
-      await callFn('client-billing', { action: 'resume' });
+      await api.post('billing/resume');
       reload();
     }, 'Subscription resumed');
 
@@ -429,8 +427,7 @@ function CompanyForm({ company, onSaved }: { company: Company; onSaved: () => vo
   const save = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const { error: err } = await supabase.from('companies').update(form).eq('id', company.id);
-      if (err) throw new Error('Could not save. Please try again.');
+      await api.post('portal/company', form);
       onSaved();
     }, 'Company details saved');
   };
@@ -439,11 +436,9 @@ function CompanyForm({ company, onSaved }: { company: Company; onSaved: () => vo
     if (!file) return;
     void run(async () => {
       if (file.size > 1024 * 1024) throw new Error('The logo must be smaller than 1 MB.');
-      const ext = (file.name.split('.').pop() ?? 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const path = `${company.id}/logo-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('logos').upload(path, file, { upsert: true });
-      if (upErr) throw new Error('Could not upload the logo. Use a PNG, JPG or WebP file.');
-      await supabase.from('companies').update({ logo_path: path }).eq('id', company.id);
+      const data = new FormData();
+      data.append('file', file);
+      await api.upload('portal/logo', data);
       onSaved();
     }, 'Logo updated');
   };
@@ -506,8 +501,8 @@ export function BillingReturn() {
     let tries = 0;
     const check = async () => {
       try {
-        const { status } = await callFn<{ status: 'successful' | 'failed' | 'processing' | 'skipped' }>(
-          'client-billing', { action: 'confirm', payment_id: payment },
+        const { status } = await api.post<{ status: 'successful' | 'failed' | 'processing' | 'skipped' }>(
+          'billing/confirm', { payment_id: payment },
         );
         if (stop) return;
         if (status === 'successful' || status === 'failed') return setState(status);

@@ -1,32 +1,15 @@
-import { readFileSync } from 'node:fs';
-import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-/**
- * Serves and builds /vyro.js, the loader clients install on their websites,
- * with the licence-check address filled in from the environment.
- */
-function vyroLoader(apiUrl: string): Plugin {
-  const source = () =>
-    readFileSync(new URL('./src/widget/loader.js', import.meta.url), 'utf8').replace('__VYRO_API__', apiUrl);
-  return {
-    name: 'vyro-loader',
-    configureServer(server) {
-      server.middlewares.use('/vyro.js', (_req, res) => {
-        res.setHeader('Content-Type', 'text/javascript');
-        res.end(source());
-      });
-    },
-    generateBundle() {
-      this.emitFile({ type: 'asset', fileName: 'vyro.js', source: source() });
-    },
-  };
-}
+// The PHP API is served by the web host next to the site. For local work, run
+// it with PHP's built-in server and let Vite forward /api and /uploads to it:
+//   VYRO_CONFIG=/path/to/config.php php -S 127.0.0.1:8791 ../platform/tests/php/router.php
+const backend = process.env.VYRO_API ?? 'http://127.0.0.1:8791';
+const proxy = { '/api': backend, '/uploads': backend };
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), 'VITE_');
-  return {
-    plugins: [react(), vyroLoader(`${env.VITE_SUPABASE_URL ?? ''}/functions/v1`)],
-  };
+export default defineConfig({
+  plugins: [react()],
+  server: { proxy },
+  preview: { proxy },
 });

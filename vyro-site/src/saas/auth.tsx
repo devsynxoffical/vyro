@@ -1,13 +1,23 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import type { Session } from '@supabase/supabase-js';
-import { supabase } from './api';
+import { api } from './api';
 
 export interface Profile {
   id: string;
+  email: string;
   role: 'admin' | 'client';
   company_id: string | null;
   full_name: string | null;
+}
+
+export interface MeResponse {
+  user: Profile | null;
+  mfa_required?: boolean;
+}
+
+/** Present whenever a login exists, even if the second step is still pending. */
+interface Session {
+  user: { id: string; email: string };
 }
 
 interface AuthState {
@@ -16,7 +26,8 @@ interface AuthState {
   profile: Profile | null;
   /** True when the account has two-step login set up but this session has not passed it yet. */
   needsSecondStep: boolean;
-  refresh: () => Promise<void>;
+  /** Apply a login / registration response, or re-read the session from the server. */
+  refresh: (known?: MeResponse) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -24,44 +35,46 @@ const Ctx = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [needsSecondStep, setNeedsSecondStep] = useState(false);
 
-  const load = async (s: Session | null) => {
-    setSession(s);
-    if (!s) {
-      setProfile(null);
-      setNeedsSecondStep(false);
-      setLoading(false);
-      return;
-    }
-    const [{ data: p }, { data: aal }] = await Promise.all([
-      supabase.from('profiles').select('id, role, company_id, full_name').eq('id', s.user.id).maybeSingle(),
-      supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
-    ]);
-    setProfile((p as Profile | null) ?? null);
-    setNeedsSecondStep(aal?.nextLevel === 'aal2' && aal.currentLevel !== 'aal2');
+  const apply = (me: MeResponse) => {
+    setProfile(me.user);
+    setNeedsSecondStep(Boolean(me.mfa_required));
     setLoading(false);
   };
 
-  useEffect(() => {
-    void supabase.auth.getSession().then(({ data }) => load(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      // Defer: Supabase must not be called from inside this callback.
-      setTimeout(() => void load(s), 0);
-    });
-    return () => sub.subscription.unsubscribe();
+  const refresh = useCallback(async (known?: MeResponse) => {
+    try {
+      apply(known ?? (await api.get<MeResponse>('me')));
+    } catch {
+      apply({ user: null });
+    }
   }, []);
+
+  useEffect(() => {
+    void refresh();
+    // The API reports an ended session (expired, or signed out in another tab).
+    const onSignedOut = () => apply({ user: null });
+    window.addEventListener('vyro:signed-out', onSignedOut);
+    return () => window.removeEventListener('vyro:signed-out', onSignedOut);
+  }, [refresh]);
+
+  const session: Session | null = profile
+    ? { user: { id: profile.id, email: profile.email } }
+    : needsSecondStep
+      ? { user: { id: '', email: '' } }
+      : null;
 
   const value: AuthState = {
     loading,
     session,
     profile,
     needsSecondStep,
-    refresh: async () => load((await supabase.auth.getSession()).data.session),
+    refresh,
     signOut: async () => {
-      await supabase.auth.signOut();
+      await api.post('auth/logout').catch(() => {});
+      apply({ user: null });
     },
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -74,15 +87,14 @@ export function useAuth(): AuthState {
 }
 
 /**
- * Route guard. This only decides what to show; the real protection is in the
- * database, which refuses data to anyone without the right role.
+ * Route guard. This only decides what to show; the real protection is on the
+ * server, which refuses data to anyone without the right role.
  */
 export function RequireRole({ role, children }: { role: 'admin' | 'client'; children: ReactNode }) {
   const { loading, session, profile, needsSecondStep } = useAuth();
   const location = useLocation();
   if (loading) return <div className="vy vy-fullstate">Loading…</div>;
-  if (!session || needsSecondStep) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
-  if (!profile) return <div className="vy vy-fullstate">This account has no access. Contact VYRO support.</div>;
+  if (!session || needsSecondStep || !profile) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   if (profile.role !== role) return <Navigate to={profile.role === 'admin' ? '/admin' : '/portal'} replace />;
   return <>{children}</>;
 }

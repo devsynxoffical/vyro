@@ -4,8 +4,8 @@
   var script = document.currentScript;
   if (!script || window.VYRO) return;
   var key = script.getAttribute('data-key') || '';
-  var api = '__VYRO_API__';
   var app = new URL(script.src).origin;
+  var api = app + '/api';
   var listeners = [];
   var overlay = null;
   var frame = null;

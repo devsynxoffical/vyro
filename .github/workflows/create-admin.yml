@@ -1,0 +1,29 @@
+# Creates a VYRO admin account (or issues a new password link for one).
+# Run it from the Actions tab with the admin's email; the one-time
+# set-password link appears in the run log and is valid for 24 hours.
+name: Create admin account
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: Admin email address
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create the account
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          EMAIL: ${{ inputs.email }}
+        run: |
+          body=$(jq -n --arg email "$EMAIL" '{email: $email}')
+          curl --fail-with-body -sS -X POST -H "X-Cron-Secret: $CRON_SECRET" -H "Content-Type: application/json" \
+            -d "$body" "${APP_URL%/}/api/setup/admin" | jq -r '"Open this link to choose the password (works once, 24 hours):\n" + .set_password_url'

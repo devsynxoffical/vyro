@@ -1,9 +1,15 @@
-# Builds the VYRO site and uploads it to the web host over FTPS.
+# Builds the VYRO site + API and uploads them to the web host over FTPS, then
+# applies any new database changes.
 #
-# Needs these repository secrets (Settings → Secrets and variables → Actions):
+# Repository secrets (Settings → Secrets and variables → Actions → Secrets):
 #   FTP_SERVER, FTP_USERNAME, FTP_PASSWORD
-# Optional repository variables for the dashboard:
-#   VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_INVOICE_FROM
+#   DB_NAME, DB_USER, DB_PASSWORD
+#   CRON_SECRET            any long random string (protects the scheduled jobs)
+#   OMPAY_API_KEY, OMPAY_API_SECRET   (add when OMPAY gives you keys)
+# Repository variables (same page → Variables):
+#   APP_URL                e.g. https://vyroes.tech   (no trailing slash)
+#   OMPAY_BASE_URL         optional; defaults to the OMPAY sandbox
+#   EMAIL_FROM, ADMIN_EMAILS, DB_HOST, VITE_INVOICE_FROM   optional
 name: Deploy website
 
 on:
@@ -41,10 +47,48 @@ jobs:
       - name: Build
         working-directory: vyro-site
         env:
-          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
           VITE_INVOICE_FROM: ${{ vars.VITE_INVOICE_FROM }}
         run: npm run build
+
+      # The server's settings file is created here from secrets, so passwords
+      # are never stored in the repository.
+      - name: Write server config
+        env:
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          APP_URL: ${{ vars.APP_URL }}
+          OMPAY_BASE_URL: ${{ vars.OMPAY_BASE_URL }}
+          OMPAY_API_KEY: ${{ secrets.OMPAY_API_KEY }}
+          OMPAY_API_SECRET: ${{ secrets.OMPAY_API_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          ADMIN_EMAILS: ${{ vars.ADMIN_EMAILS }}
+        run: |
+          for name in DB_NAME DB_USER DB_PASSWORD CRON_SECRET APP_URL; do
+            if [ -z "${!name}" ]; then echo "::error::Missing $name (see the top of this workflow file)"; exit 1; fi
+          done
+          php -r '
+            $e = fn ($k, $d = "") => getenv($k) !== false && getenv($k) !== "" ? getenv($k) : $d;
+            $config = [
+              "db_host" => $e("DB_HOST", "localhost"),
+              "db_name" => $e("DB_NAME"),
+              "db_user" => $e("DB_USER"),
+              "db_password" => $e("DB_PASSWORD"),
+              "app_url" => rtrim($e("APP_URL"), "/"),
+              "timezone" => "Asia/Muscat",
+              "ompay_base_url" => $e("OMPAY_BASE_URL", "https://api.sandbox.truepay.ompay.om"),
+              "ompay_api_key" => $e("OMPAY_API_KEY"),
+              "ompay_api_secret" => $e("OMPAY_API_SECRET"),
+              "cron_secret" => $e("CRON_SECRET"),
+              "email_from" => $e("EMAIL_FROM"),
+              "admin_emails" => $e("ADMIN_EMAILS"),
+            ];
+            if ($config["email_from"] === "") unset($config["email_from"]);
+            file_put_contents("vyro-site/dist/api/config.php", "<?php\nreturn " . var_export($config, true) . ";\n");
+          '
+          php -l vyro-site/dist/api/config.php
 
       - name: Upload over FTPS
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
@@ -57,5 +101,12 @@ jobs:
           local-dir: vyro-site/dist/
           server-dir: ./
           # Only files this workflow uploaded are ever replaced or removed;
-          # anything else already on the server is left alone.
+          # client uploads and anything else on the server are left alone.
           dangerous-clean-slate: false
+
+      - name: Apply database changes
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body -sS -X POST -H "X-Cron-Secret: $CRON_SECRET" "${APP_URL%/}/api/cron/migrate"

@@ -33,7 +33,7 @@ if (($_SERVER['HTTP_OMPAY_API_KEY'] ?? '') !== 'test-key' || ($_SERVER['HTTP_OMP
 }
 if ($path === '/api/v1/transactions/bank-hosted') {
     $id = 'tx' . ++$state['n'];
-    $state['tx'][$id] = ['transaction_id' => $id, 'reference_number' => $body['reference_number'], 'status' => 'PROCESSING', 'amount' => $body['amount']];
+    $state['tx'][$id] = ['transaction_id' => $id, 'reference_number' => $body['reference_number'], 'status' => 'PROCESSING', 'amount' => $body['amount'], 'return_url' => $body['return_url'] ?? null];
     $save();
     $out(['success' => true, 'data' => ['transaction_id' => $id, 'status' => 'PROCESSING', 'redirect_url' => "http://ompay.test/pay/$id"]]);
 }

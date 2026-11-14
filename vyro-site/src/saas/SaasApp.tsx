@@ -1,7 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import './styles/tokens.css';
 import './styles/console.css';
-import { configured } from './api';
 import { AuthProvider, RequireRole } from './auth';
 import { FeedbackProvider } from './ui';
 import { Login } from './pages/Login';
@@ -15,13 +14,6 @@ import { AdminSettings } from './pages/admin/AdminSettings';
 
 /** Client portal and admin console. Loaded on demand, separate from the marketing site. */
 export default function SaasApp() {
-  if (!configured) {
-    return (
-      <div className="vy vy-fullstate">
-        The console is not connected yet: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (see platform/README.md).
-      </div>
-    );
-  }
   return (
     <AuthProvider>
       <FeedbackProvider>

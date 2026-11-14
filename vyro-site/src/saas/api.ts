@@ -1,34 +1,61 @@
-import { createClient } from '@supabase/supabase-js';
+/**
+ * Client for the VYRO API (PHP + MySQL, served from /api on the same site).
+ *
+ * The browser holds no keys. It is signed in by an HttpOnly session cookie, and
+ * every change carries the session's CSRF token. What a user may read or change
+ * is decided on the server, never here.
+ */
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+let csrf: string | null = null;
 
-export const configured = Boolean(url && anonKey);
+export function setCsrf(token: string | null | undefined) {
+  if (token !== undefined) csrf = token;
+}
 
-// The anon key is public by design: what a browser may read or change is
-// decided by row-level security in the database, not by this key.
-export const supabase = createClient(url ?? 'http://localhost:54321', anonKey ?? 'missing');
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
 
-export const FUNCTIONS_URL = `${url ?? ''}/functions/v1`;
-
-/** Calls an Edge Function with the signed-in user's token. */
-export async function callFn<T = Record<string, unknown>>(
-  name: string,
-  body: Record<string, unknown>,
-): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const res = await fetch(`${FUNCTIONS_URL}/${name}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: anonKey ?? '',
-      Authorization: `Bearer ${data.session?.access_token ?? anonKey ?? ''}`,
-    },
-    body: JSON.stringify(body),
-  });
-  const json = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new Error(json.error ?? 'Something went wrong. Please try again.');
+async function request<T>(method: 'GET' | 'POST', path: string, body?: Record<string, unknown> | FormData): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (method !== 'GET' && csrf) headers['X-CSRF-Token'] = csrf;
+  let payload: BodyInit | undefined;
+  if (body instanceof FormData) payload = body;
+  else if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    payload = JSON.stringify(body);
+  }
+  let res: Response;
+  try {
+    res = await fetch(`/api/${path}`, { method, headers, body: payload, credentials: 'same-origin' });
+  } catch {
+    throw new ApiError('Could not reach the server. Check your connection and try again.', 0);
+  }
+  const json = (await res.json().catch(() => ({}))) as { error?: string; csrf?: string };
+  if (json.csrf) csrf = json.csrf;
+  if (!res.ok) {
+    // The session ended (expired, or signed out in another tab): tell the app once.
+    if (res.status === 401 && path !== 'me' && !path.startsWith('auth/')) window.dispatchEvent(new Event('vyro:signed-out'));
+    throw new ApiError(json.error ?? 'Something went wrong. Please try again.', res.status);
+  }
   return json as T;
+}
+
+export const api = {
+  get: <T = Record<string, unknown>>(path: string) => request<T>('GET', path),
+  post: <T = Record<string, unknown>>(path: string, body: Record<string, unknown> = {}) => request<T>('POST', path, body),
+  /** Multipart upload (images) */
+  upload: <T = Record<string, unknown>>(path: string, form: FormData) => request<T>('POST', path, form),
+};
+
+/** Address of a stored logo or product image. */
+export function uploadUrl(path: string | null | undefined): string | null {
+  return path ? `/uploads/${path}` : null;
 }
 
 export type SubscriptionStatus =
@@ -78,6 +105,8 @@ export interface Subscription {
   grace_until: string | null;
   contract_end: string | null;
   widget_override: 'force_on' | 'force_off' | null;
+  /** Whether VYRO is running on the client's website right now (decided by the server) */
+  live?: boolean;
 }
 
 export interface InvoiceItem {
@@ -119,6 +148,7 @@ export interface Notice {
   body: string | null;
   read_at: string | null;
   created_at: string;
+  company_name?: string | null;
 }
 
 export interface ExtraCharge {
@@ -129,10 +159,6 @@ export interface ExtraCharge {
   invoice_id: string | null;
 }
 
-export const COMPANY_COLUMNS =
-  'id, name, store_name, website, logo_path, contact_name, contact_email, contact_phone, address, created_at';
-export const CARD_COLUMNS = 'id, company_id, brand, masked_pan, is_default, revoked_at, created_at';
-
 export function money(amount: number | string, currency = 'OMR'): string {
   return `${Number(amount).toFixed(3)} ${currency}`;
 }
@@ -142,9 +168,7 @@ export function day(d: string | null | undefined): string {
   return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-export function logoUrl(path: string | null): string | null {
-  return path ? supabase.storage.from('logos').getPublicUrl(path).data.publicUrl : null;
-}
+export const logoUrl = uploadUrl;
 
 export const STATUS_LABEL: Record<SubscriptionStatus, string> = {
   pending_setup: 'Awaiting setup payment',
@@ -155,21 +179,8 @@ export const STATUS_LABEL: Record<SubscriptionStatus, string> = {
   suspended: 'Suspended',
 };
 
-/** Mirrors public.subscription_is_live in the database (for display only). */
 export function isLive(s: Subscription | null | undefined): boolean {
-  if (!s) return false;
-  if (s.widget_override === 'force_on') return true;
-  if (s.widget_override === 'force_off') return false;
-  const today = new Date().toISOString().slice(0, 10);
-  if (s.status === 'active') {
-    if (!s.current_period_end) return false;
-    const slack = new Date(s.current_period_end);
-    slack.setDate(slack.getDate() + 1);
-    return slack.toISOString().slice(0, 10) >= today;
-  }
-  if (s.status === 'cancel_scheduled') return !!s.current_period_end && s.current_period_end > today;
-  if (s.status === 'past_due') return !!s.grace_until && new Date(s.grace_until) > new Date();
-  return false;
+  return Boolean(s?.live);
 }
 
 /** "3h ago", "2d ago", then a date. */

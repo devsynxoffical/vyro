@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { CircleAlert, ReceiptText, Trash2 } from 'lucide-react';
 import {
-  amount, callFn, CARD_COLUMNS, COMPANY_COLUMNS, day, isLive, logoUrl, money, supabase,
+  amount, api, day, isLive, logoUrl, money,
   type Company, type ExtraCharge, type Invoice, type PaymentMethod, type Plan, type Subscription,
 } from '../../api';
 import { ProductsPanel } from '../../Products';
@@ -13,8 +13,7 @@ import {
 } from '../../ui';
 
 interface Data {
-  company: Company;
-  notes: string;
+  company: Company & { notes: string };
   plan: Plan | null;
   sub: Subscription | null;
   invoices: Invoice[];
@@ -24,31 +23,7 @@ interface Data {
   registered: boolean;
 }
 
-async function load(id: string): Promise<Data> {
-  const [company, notes, plan, sub, invoices, extras, card, key, users] = await Promise.all([
-    supabase.from('companies').select(COMPANY_COLUMNS).eq('id', id).single(),
-    supabase.rpc('company_notes', { p_company: id }),
-    supabase.from('plans').select('*').eq('company_id', id).eq('active', true).maybeSingle(),
-    supabase.from('subscriptions').select('*').eq('company_id', id).maybeSingle(),
-    supabase.from('invoices').select('*, invoice_items(id, description, amount)').eq('company_id', id).order('created_at', { ascending: false }),
-    supabase.from('extra_charges').select('*').eq('company_id', id).order('created_at', { ascending: false }),
-    supabase.from('payment_methods').select(CARD_COLUMNS).eq('company_id', id).eq('is_default', true).is('revoked_at', null).maybeSingle(),
-    supabase.from('widget_keys').select('public_key, allowed_domains').eq('company_id', id).maybeSingle(),
-    supabase.from('profiles').select('id').eq('company_id', id).limit(1),
-  ]);
-  if (company.error || !company.data) throw new Error('Client not found.');
-  return {
-    company: company.data as Company,
-    notes: (notes.data as string | null) ?? '',
-    plan: plan.data as Plan | null,
-    sub: sub.data as Subscription | null,
-    invoices: (invoices.data ?? []) as Invoice[],
-    extras: (extras.data ?? []) as ExtraCharge[],
-    card: card.data as PaymentMethod | null,
-    key: key.data as Data['key'],
-    registered: (users.data ?? []).length > 0,
-  };
-}
+const load = (id: string) => api.get<Data>(`admin/client?id=${encodeURIComponent(id)}`);
 
 type Tab = 'overview' | 'billing' | 'products' | 'access';
 type Override = 'auto' | 'force_on' | 'force_off';
@@ -79,11 +54,10 @@ export function AdminClient() {
   const live = isLive(sub);
   const unpaid = invoices.filter((i) => i.status === 'open' || i.status === 'failed');
 
-  /** Runs a change, surfaces database errors, then reloads the record. */
-  const act = (fn: () => PromiseLike<unknown>, success: string) =>
+  /** Runs a change, then reloads the record. */
+  const act = (fn: () => Promise<unknown>, success: string) =>
     void run(async () => {
-      const res = (await fn()) as { error?: { message: string } | null } | undefined;
-      if (res && typeof res === 'object' && 'error' in res && res.error) throw new Error('That change could not be saved.');
+      await fn();
       reload();
     }, success);
 
@@ -98,7 +72,7 @@ export function AdminClient() {
       if (!ok) return;
     }
     act(
-      () => supabase.from('subscriptions').update({ widget_override: v === 'auto' ? null : v }).eq('company_id', id),
+      () => api.post('admin/widget', { company_id: id, override: v }),
       v === 'auto' ? 'Widget follows the subscription' : v === 'force_on' ? 'Widget forced on' : 'Widget forced off',
     );
   };
@@ -109,7 +83,7 @@ export function AdminClient() {
       body: `Invoice ${inv.number} will be charged to ${card?.brand ?? 'the saved card'} ${card?.masked_pan ?? ''}.`,
       confirmLabel: 'Charge card',
     });
-    if (ok) act(() => callFn('admin-clients', { action: 'charge_now', invoice_id: inv.id }), 'Charge submitted');
+    if (ok) act(() => api.post('admin/charge', { invoice_id: inv.id }), 'Charge submitted');
   };
   const markPaid = async (inv: Invoice) => {
     const note = await ask({
@@ -118,7 +92,7 @@ export function AdminClient() {
       input: { label: 'Reference or note', placeholder: 'Bank transfer ref' },
       confirmLabel: 'Mark as paid',
     });
-    if (typeof note === 'string') act(() => callFn('admin-clients', { action: 'mark_paid_offline', invoice_id: inv.id, note }), 'Invoice marked as paid');
+    if (typeof note === 'string') act(() => api.post('admin/mark-paid', { invoice_id: inv.id, note }), 'Invoice marked as paid');
   };
   const activate = async () => {
     const ok = await ask({
@@ -126,7 +100,7 @@ export function AdminClient() {
       body: 'This activates VYRO without an online setup payment. Billing starts on the agreed date.',
       confirmLabel: 'Activate',
     });
-    if (ok) act(() => callFn('admin-clients', { action: 'activate', company_id: id }), 'Subscription activated');
+    if (ok) act(() => api.post('admin/activate', { company_id: id }), 'Subscription activated');
   };
 
   return (
@@ -220,7 +194,7 @@ export function AdminClient() {
                   />
                 </div>
               </Panel>
-              <NotesPanel companyId={id} notes={d.notes} />
+              <NotesPanel companyId={id} notes={company.notes ?? ''} />
             </div>
           </>
         )}
@@ -326,12 +300,14 @@ function PlanPanel({ plan, onSaved }: { plan: Plan; onSaved: () => void }) {
   const save = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const { error: err } = await supabase.from('plans').update({
-        recurring_fee: Number(f.recurring_fee), product_limit: Math.floor(Number(f.product_limit)),
-        billing_interval: f.billing_interval, contract_months: f.contract_months ? Number(f.contract_months) : null,
-        cancellation_terms: f.cancellation_terms || null,
-      }).eq('id', plan.id);
-      if (err) throw new Error('Could not save the plan. Check the numbers.');
+      await api.post('admin/plan', {
+        company_id: plan.company_id,
+        recurring_fee: Number(f.recurring_fee),
+        product_limit: Math.floor(Number(f.product_limit)),
+        billing_interval: f.billing_interval,
+        contract_months: f.contract_months ? Number(f.contract_months) : null,
+        cancellation_terms: f.cancellation_terms,
+      });
       onSaved();
     }, 'Plan saved');
   };
@@ -381,8 +357,7 @@ function ExtrasPanel({ companyId, extras, currency, onSaved }: { companyId: stri
   const add = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const { error: err } = await supabase.from('extra_charges').insert({ company_id: companyId, description, amount: Number(value) });
-      if (err) throw new Error('Could not add the charge. The amount must be above zero.');
+      await api.post('admin/extras', { company_id: companyId, description, amount: Number(value) });
       setDescription('');
       setValue('');
       onSaved();
@@ -402,7 +377,7 @@ function ExtrasPanel({ companyId, extras, currency, onSaved }: { companyId: stri
                   variant="ghost"
                   aria-label={`Remove ${x.description}`}
                   icon={<Trash2 />}
-                  onClick={() => void run(async () => { await supabase.from('extra_charges').delete().eq('id', x.id); onSaved(); }, 'Extra charge removed')}
+                  onClick={() => void run(async () => { await api.post('admin/extras/delete', { id: x.id }); onSaved(); }, 'Extra charge removed')}
                 />
               </span>,
             ])}
@@ -437,9 +412,7 @@ function WidgetPanel({ companyId, publicKey, domains, onSaved }: { companyId: st
   const save = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const list = value.split(/[\s,]+/).map((x) => x.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')).filter(Boolean);
-      const { error: err } = await supabase.from('widget_keys').update({ allowed_domains: list }).eq('company_id', companyId);
-      if (err) throw new Error('Could not save the websites.');
+      await api.post('admin/domains', { company_id: companyId, domains: value.split(/[\s,]+/).filter(Boolean) });
       onSaved();
     }, 'Allowed websites saved');
   };
@@ -487,7 +460,7 @@ function InvitePanel({ companyId, email, registered }: { companyId: string; emai
             disabled={!email}
             onClick={() =>
               void run(async () => {
-                const r = await callFn<{ invite_url: string }>('admin-clients', { action: 'create_invite', company_id: companyId, email });
+                const r = await api.post<{ invite_url: string }>('admin/invite', { company_id: companyId, email });
                 setInvite(r.invite_url);
               }, 'Registration link created')
             }
@@ -516,8 +489,7 @@ function NotesPanel({ companyId, notes }: { companyId: string; notes: string }) 
             disabled={value === notes}
             onClick={() =>
               void run(async () => {
-                const { error: err } = await supabase.from('companies').update({ notes: value }).eq('id', companyId);
-                if (err) throw new Error('Could not save.');
+                await api.post('admin/notes', { company_id: companyId, notes: value });
               }, 'Notes saved')
             }
           >

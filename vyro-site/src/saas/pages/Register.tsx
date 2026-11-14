@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { callFn, supabase } from '../api';
+import { api } from '../api';
+import { useAuth, type MeResponse } from '../auth';
 import { Button, ErrorNote, Field, Notice, useAction } from '../ui';
 import { AuthLayout } from './AuthLayout';
 
@@ -18,6 +19,7 @@ export function Register() {
   const [params] = useSearchParams();
   const token = params.get('invite') ?? '';
   const navigate = useNavigate();
+  const { refresh } = useAuth();
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [invalid, setInvalid] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -34,7 +36,7 @@ export function Register() {
   const { busy, error, run } = useAction();
 
   useEffect(() => {
-    callFn<InviteInfo>('register', { action: 'lookup', token })
+    api.post<InviteInfo>('register/lookup', { token })
       .then((info) => {
         setInvite(info);
         setForm((f) => ({
@@ -57,8 +59,8 @@ export function Register() {
     void run(async () => {
       if (form.password.length < 10) throw new Error('Password must be at least 10 characters.');
       if (form.password !== form.confirm) throw new Error('The two passwords do not match.');
-      const { email } = await callFn<{ email: string }>('register', {
-        action: 'complete',
+      // Registering also signs the client in.
+      const me = await api.post<MeResponse>('register/complete', {
         token,
         password: form.password,
         full_name: form.full_name,
@@ -70,18 +72,12 @@ export function Register() {
           address: form.address,
         },
       });
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password: form.password });
-      if (signInError || !data.user) {
-        navigate('/login');
-        return;
-      }
       if (logo) {
-        const { data: profile } = await supabase.from('profiles').select('company_id').eq('id', data.user.id).single();
-        const ext = (logo.name.split('.').pop() ?? 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const path = `${profile?.company_id}/logo-${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage.from('logos').upload(path, logo, { upsert: true });
-        if (!upErr) await supabase.from('companies').update({ logo_path: path }).eq('id', profile?.company_id);
+        const data = new FormData();
+        data.append('file', logo);
+        await api.upload('portal/logo', data).catch(() => {}); // a logo problem must not block registration
       }
+      await refresh(me);
       navigate('/portal');
     });
   };

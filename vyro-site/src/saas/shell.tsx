@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Bell, ChevronRight, LogOut, Search, Settings } from 'lucide-react';
-import { ago, logoUrl, noticeTone, supabase, type Notice } from './api';
+import { ago, api, logoUrl, noticeTone, type Notice } from './api';
 import { useAuth } from './auth';
 import { Avatar, Button, Empty, Popover } from './ui';
 
@@ -150,23 +150,14 @@ export function AppShell({
 /** Notifications from the database, with unread state. */
 function Inbox({ role }: { role: 'admin' | 'client' }) {
   const [items, setItems] = useState<Notice[]>([]);
-  const [names, setNames] = useState<Map<string, string>>(new Map());
 
   const load = useCallback(async () => {
-    const { data } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('audience', role)
-      .order('created_at', { ascending: false })
-      .limit(20);
-    const list = (data ?? []) as Notice[];
-    setItems(list);
-    if (role === 'admin' && list.length) {
-      const ids = [...new Set(list.map((n) => n.company_id).filter(Boolean))] as string[];
-      const { data: cs } = await supabase.from('companies').select('id, name').in('id', ids);
-      setNames(new Map(((cs ?? []) as { id: string; name: string }[]).map((c) => [c.id, c.name])));
+    try {
+      setItems((await api.get<{ notifications: Notice[] }>('notifications')).notifications);
+    } catch {
+      // keep what is shown; the next poll tries again
     }
-  }, [role]);
+  }, []);
   useEffect(() => {
     void load();
     const timer = setInterval(() => void load(), 60_000);
@@ -178,7 +169,7 @@ function Inbox({ role }: { role: 'admin' | 'client' }) {
     if (!unread.length) return;
     const now = new Date().toISOString();
     setItems((list) => list.map((n) => (n.read_at ? n : { ...n, read_at: now })));
-    await supabase.from('notifications').update({ read_at: now }).in('id', unread.map((n) => n.id));
+    await api.post('notifications/read').catch(() => {});
   };
 
   return (
@@ -208,7 +199,7 @@ function Inbox({ role }: { role: 'admin' | 'client' }) {
             <ul className="vy-feed vy-inbox__list">
               {items.map((n) => {
                 const tone = noticeTone(n.kind);
-                const who = n.company_id ? names.get(n.company_id) : null;
+                const who = n.company_name;
                 return (
                   <li key={n.id} style={{ opacity: n.read_at ? 0.72 : 1 }}>
                     <span className={`vy-feed__dot ${tone ? `vy-feed__dot--${tone}` : ''}`} />
@@ -264,18 +255,16 @@ function ClientSearch() {
   }, []);
 
   useEffect(() => {
-    const term = q.trim().replace(/[%,()]/g, '');
+    const term = q.trim();
     if (!term) return setHits([]);
     const timer = setTimeout(() => {
-      void supabase
-        .from('companies')
-        .select('id, name, store_name, logo_path')
-        .or(`name.ilike.%${term}%,store_name.ilike.%${term}%`)
-        .limit(6)
-        .then(({ data }) => {
-          setHits((data ?? []) as Hit[]);
+      void api
+        .get<{ hits: Hit[] }>(`admin/search?q=${encodeURIComponent(term)}`)
+        .then(({ hits: found }) => {
+          setHits(found);
           setCursor(0);
-        });
+        })
+        .catch(() => setHits([]));
     }, 180);
     return () => clearTimeout(timer);
   }, [q]);

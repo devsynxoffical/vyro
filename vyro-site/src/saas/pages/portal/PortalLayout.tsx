@@ -1,9 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { Building2, LayoutDashboard, Package, ReceiptText } from 'lucide-react';
-import {
-  callFn, CARD_COLUMNS, COMPANY_COLUMNS, logoUrl, supabase,
-  type Company, type Invoice, type PaymentMethod, type Plan, type Subscription,
-} from '../../api';
+import { api, logoUrl, type Company, type Invoice, type PaymentMethod, type Plan, type Subscription } from '../../api';
 import { useAuth } from '../../auth';
 import { AppShell, type NavItem } from '../../shell';
 import { Button, useAction } from '../../ui';
@@ -35,32 +32,8 @@ export function usePortal(): PortalState {
   return v;
 }
 
-async function load(companyId: string): Promise<PortalData> {
-  const [company, plan, sub, invoices, card, key, products] = await Promise.all([
-    supabase.from('companies').select(COMPANY_COLUMNS).eq('id', companyId).single(),
-    supabase.from('plans').select('*').eq('company_id', companyId).eq('active', true).maybeSingle(),
-    supabase.from('subscriptions').select('*').eq('company_id', companyId).maybeSingle(),
-    supabase
-      .from('invoices')
-      .select('*, invoice_items(id, description, amount)')
-      .eq('company_id', companyId)
-      .neq('status', 'void')
-      .order('created_at', { ascending: false }),
-    supabase.from('payment_methods').select(CARD_COLUMNS).eq('company_id', companyId).eq('is_default', true).is('revoked_at', null).maybeSingle(),
-    supabase.from('widget_keys').select('public_key').eq('company_id', companyId).maybeSingle(),
-    supabase.from('products').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('active', true),
-  ]);
-  if (company.error || !company.data) throw new Error('Could not load your account.');
-  return {
-    company: company.data as Company,
-    plan: plan.data as Plan | null,
-    sub: sub.data as Subscription | null,
-    invoices: (invoices.data ?? []) as Invoice[],
-    card: card.data as PaymentMethod | null,
-    widgetKey: (key.data as { public_key: string } | null)?.public_key ?? null,
-    liveProducts: products.count ?? 0,
-  };
-}
+/** One request returns everything the portal shows; the server scopes it to the caller's company. */
+const load = () => api.get<PortalData>('portal');
 
 const NAV: NavItem[] = [
   { to: '/portal', label: 'Overview', icon: <LayoutDashboard />, end: true },
@@ -80,13 +53,13 @@ export function PortalLayout() {
   const reload = useCallback(() => {
     if (!companyId) return;
     setFailed(null);
-    load(companyId).then(setData).catch((e: Error) => setFailed(e.message));
+    load().then(setData).catch((e: Error) => setFailed(e.message));
   }, [companyId]);
   useEffect(reload, [reload]);
 
-  const redirect = (action: string, extra: Record<string, unknown> = {}) =>
+  const redirect = (path: string, body: Record<string, unknown> = {}) =>
     void run(async () => {
-      const res = await callFn<{ redirect_url: string }>('client-billing', { action, ...extra });
+      const res = await api.post<{ redirect_url: string }>(path, body);
       window.location.assign(res.redirect_url); // OMPAY's secure payment page
     });
 
@@ -110,8 +83,8 @@ export function PortalLayout() {
         data,
         reload,
         busy,
-        pay: (invoiceId) => redirect('pay_invoice', { invoice_id: invoiceId }),
-        updateCard: () => redirect('update_card'),
+        pay: (invoiceId) => redirect('billing/pay', { invoice_id: invoiceId }),
+        updateCard: () => redirect('billing/update-card'),
       }}
     >
       <AppShell

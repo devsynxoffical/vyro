@@ -14,6 +14,8 @@ interface CatalogItem {
 }
 
 const TYPES: ProductType[] = ['ring', 'watch', 'glasses', 'necklace'];
+// Images must be https; plain http is accepted only when this page itself is http (local testing).
+const IMAGE_URL = window.location.protocol === 'http:' ? /^https?:\/\// : /^https:\/\//;
 
 /** Validates what the loader sent; anything malformed is dropped. */
 function toProducts(list: unknown): { products: Product[]; skus: Map<string, string> } {
@@ -21,7 +23,7 @@ function toProducts(list: unknown): { products: Product[]; skus: Map<string, str
   const skus = new Map<string, string>();
   for (const raw of Array.isArray(list) ? (list as CatalogItem[]) : []) {
     if (!raw || typeof raw.id !== 'string' || typeof raw.name !== 'string') continue;
-    if (!TYPES.includes(raw.type) || typeof raw.image !== 'string' || !/^https:\/\//.test(raw.image)) continue;
+    if (!TYPES.includes(raw.type) || typeof raw.image !== 'string' || !IMAGE_URL.test(raw.image)) continue;
     const o = raw.options ?? {};
     products.push({
       id: raw.id,
