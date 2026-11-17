@@ -1,0 +1,20 @@
+# Checks which OMPAY system (live or sandbox) accepts the configured API keys.
+# Read-only: no payment is made and the keys are never printed.
+name: Check OMPAY keys
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask the site to test its OMPAY keys
+        env:
+          APP_URL: ${{ vars.APP_URL || secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body -sS --max-time 120 -X POST -H "X-Cron-Secret: $CRON_SECRET" "${APP_URL%/}/api/cron/ompay-check" | jq .

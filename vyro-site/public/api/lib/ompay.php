@@ -43,12 +43,31 @@ final class Ompay implements Gateway
 
     public static function fromConfig(): self
     {
-        $key = (string) cfg('ompay_api_key', '');
-        $secret = (string) cfg('ompay_api_secret', '');
+        // Trimmed: a stray space or line break from copy-paste would make OMPAY reject the keys.
+        $key = trim((string) cfg('ompay_api_key', ''));
+        $secret = trim((string) cfg('ompay_api_secret', ''));
         if ($key === '' || $secret === '') {
             fail(503, 'Online payments are not set up yet.');
         }
         return new self((string) cfg('ompay_base_url', 'https://api.sandbox.truepay.ompay.om'), $key, $secret);
+    }
+
+    /**
+     * Tries a harmless read-only call and reports whether OMPAY accepts these
+     * keys on this system. Never returns the keys.
+     *
+     * @return array{accepted:bool,http:int,error:?string,message:?string}
+     */
+    public function probe(): array
+    {
+        try {
+            $this->call('GET', '/transactions?limit=1');
+            return ['accepted' => true, 'http' => 200, 'error' => null, 'message' => null];
+        } catch (OmpayError $e) {
+            // Any answer other than "bad credentials" means the keys were recognised.
+            $rejected = in_array($e->errorCode, ['INVALID_CREDENTIALS', 'UNAUTHORIZED'], true) || $e->httpStatus === 401;
+            return ['accepted' => !$rejected && $e->httpStatus !== 0, 'http' => $e->httpStatus, 'error' => $e->errorCode, 'message' => $e->getMessage()];
+        }
     }
 
     private function call(string $method, string $path, array|stdClass|null $body = null): array

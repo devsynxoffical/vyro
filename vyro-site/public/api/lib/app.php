@@ -113,6 +113,31 @@ try {
         }
         send($summary, $summary['errors'] ? 207 : 200);
     }
+    if ($path === 'cron/ompay-check') {
+        // Diagnostic: which OMPAY system (if any) accepts the configured keys.
+        need_cron_secret();
+        $rawKey = (string) cfg('ompay_api_key', '');
+        $rawSecret = (string) cfg('ompay_api_secret', '');
+        $key = trim($rawKey);
+        $secret = trim($rawSecret);
+        $report = [
+            'configured_system' => (string) cfg('ompay_base_url', ''),
+            'key_present' => $key !== '',
+            'secret_present' => $secret !== '',
+            'key_had_extra_spaces' => $rawKey !== $key,
+            'secret_had_extra_spaces' => $rawSecret !== $secret,
+            'key_and_secret_identical' => $key !== '' && $key === $secret,
+        ];
+        if ($key !== '' && $secret !== '') {
+            $systems = ['live' => 'https://api.truepay.ompay.om', 'sandbox' => 'https://api.sandbox.truepay.ompay.om'];
+            foreach ($systems as $name => $base) {
+                $report[$name] = (new Ompay($base, $key, $secret))->probe();
+                // The same pair the other way round, in case they were pasted into the wrong boxes.
+                $report[$name . '_swapped'] = (new Ompay($base, $secret, $key))->probe()['accepted'];
+            }
+        }
+        send($report);
+    }
     if ($path === 'setup/admin') {
         need_cron_secret();
         $email = strtolower(in_str('email', 200));
