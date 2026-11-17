@@ -8,7 +8,8 @@
 #   OMPAY_API_KEY, OMPAY_API_SECRET   (add when OMPAY gives you keys)
 # Repository variables (same page → Variables; saving them as secrets works too):
 #   APP_URL                e.g. https://vyroes.tech   (no trailing slash)
-#   OMPAY_BASE_URL         optional; defaults to the OMPAY sandbox
+#   OMPAY_BASE_URL         optional; defaults to OMPAY's live system. For test keys set it
+#                          to https://api.sandbox.truepay.ompay.om
 #   EMAIL_FROM, ADMIN_EMAILS, DB_HOST, VITE_INVOICE_FROM   optional
 name: Deploy website
 
@@ -78,7 +79,7 @@ jobs:
               "db_password" => $e("DB_PASSWORD"),
               "app_url" => rtrim($e("APP_URL"), "/"),
               "timezone" => "Asia/Muscat",
-              "ompay_base_url" => $e("OMPAY_BASE_URL", "https://api.sandbox.truepay.ompay.om"),
+              "ompay_base_url" => $e("OMPAY_BASE_URL", "https://api.truepay.ompay.om"),
               "ompay_api_key" => $e("OMPAY_API_KEY"),
               "ompay_api_secret" => $e("OMPAY_API_SECRET"),
               "cron_secret" => $e("CRON_SECRET"),

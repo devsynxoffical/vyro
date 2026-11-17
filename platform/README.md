@@ -59,7 +59,7 @@ GitHub → repository → Settings → Secrets and variables → Actions.
 | Name | Value |
 |---|---|
 | `APP_URL` | the site address, e.g. `https://vyroes.tech` (no trailing slash) |
-| `OMPAY_BASE_URL` | leave unset for the OMPAY sandbox; `https://api.truepay.ompay.om` for live payments |
+| `OMPAY_BASE_URL` | leave unset for live payments; set to `https://api.sandbox.truepay.ompay.om` when using OMPAY test keys |
 | `ADMIN_EMAILS` | where admin notifications are emailed (comma separated) |
 | `EMAIL_FROM` | e.g. `VYRO <billing@vyroes.tech>` |
 | `VITE_INVOICE_FROM` | seller details printed on invoices, lines separated by `\n` |
