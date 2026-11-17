@@ -110,4 +110,5 @@ jobs:
           APP_URL: ${{ vars.APP_URL || secrets.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl --fail-with-body -sS -X POST -H "X-Cron-Secret: $CRON_SECRET" "${APP_URL%/}/api/cron/migrate"
+          # Shared hosting is sometimes briefly busy right after an upload: retry a few times.
+          curl --fail-with-body -sS --retry 5 --retry-delay 6 --retry-all-errors -X POST -H "X-Cron-Secret: $CRON_SECRET" "${APP_URL%/}/api/cron/migrate"
