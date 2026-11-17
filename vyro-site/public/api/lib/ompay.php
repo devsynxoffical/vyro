@@ -53,32 +53,16 @@ final class Ompay implements Gateway
 
     private function call(string $method, string $path, array|stdClass|null $body = null): array
     {
-        $ch = curl_init(rtrim($this->baseUrl, '/') . '/api/v1' . $path);
-        curl_setopt_array($ch, [
-            CURLOPT_CUSTOMREQUEST => $method,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 45,
-            CURLOPT_HTTPHEADER => [
-                'OMPAY-API-Key: ' . $this->apiKey,
-                'OMPAY-API-Secret: ' . $this->apiSecret,
-                'Content-Type: application/json',
-                'Accept: application/json',
-            ],
-        ]);
-        if ($body !== null) {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
-        }
-        $raw = curl_exec($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        $netError = curl_error($ch);
-        curl_close($ch);
+        $url = rtrim($this->baseUrl, '/') . '/api/v1' . $path;
+        $headers = [
+            'OMPAY-API-Key: ' . $this->apiKey,
+            'OMPAY-API-Secret: ' . $this->apiSecret,
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ];
+        [$raw, $status] = $this->send($method, $url, $headers, $body === null ? null : (string) json_encode($body));
 
-        if ($raw === false) {
-            // Network failure or timeout: the request may or may not have arrived.
-            throw new OmpayError('NETWORK', $netError ?: 'Connection failed', 0);
-        }
-        $json = json_decode((string) $raw, true);
+        $json = json_decode($raw, true);
         if ($status >= 400 || !is_array($json) || ($json['success'] ?? true) === false) {
             throw new OmpayError(
                 is_array($json) ? (string) ($json['error'] ?? "HTTP_$status") : "HTTP_$status",
@@ -87,6 +71,86 @@ final class Ompay implements Gateway
             );
         }
         return is_array($json['data'] ?? null) ? $json['data'] : [];
+    }
+
+    /**
+     * Sends the request and returns [body, HTTP status].
+     *
+     * Shared hosting often forbids cURL's background DNS lookup ("getaddrinfo()
+     * thread failed to start"). So the address is looked up here first and
+     * handed to cURL, and if cURL still cannot even look the host up (the
+     * request never left this server) the request is sent with PHP's own HTTP
+     * client instead.
+     *
+     * @return array{0:string,1:int}
+     */
+    private function send(string $method, string $url, array $headers, ?string $payload): array
+    {
+        $forceStream = getenv('VYRO_OMPAY_TRANSPORT') === 'stream';
+        if (!$forceStream && function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_CUSTOMREQUEST => $method,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_TIMEOUT => 45,
+                CURLOPT_HTTPHEADER => $headers,
+            ]);
+            $host = (string) parse_url($url, PHP_URL_HOST);
+            if ($host !== '' && filter_var($host, FILTER_VALIDATE_IP) === false) {
+                $ip = gethostbyname($host); // returns the name unchanged when the lookup fails
+                if ($ip !== $host) {
+                    $port = parse_url($url, PHP_URL_PORT) ?: (parse_url($url, PHP_URL_SCHEME) === 'http' ? 80 : 443);
+                    curl_setopt($ch, CURLOPT_RESOLVE, ["$host:$port:$ip"]);
+                }
+            }
+            if ($payload !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            }
+            $raw = curl_exec($ch);
+            $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $errno = curl_errno($ch);
+            $error = curl_error($ch);
+            curl_close($ch);
+            if ($raw !== false) {
+                return [(string) $raw, $status];
+            }
+            $neverLeft = in_array($errno, [5, 6], true) || stripos($error, 'getaddrinfo') !== false || stripos($error, 'resolve') !== false;
+            if (!$neverLeft) {
+                // Timeout or dropped connection: the request may or may not have arrived.
+                throw new OmpayError('NETWORK', $error ?: 'Connection failed', 0);
+            }
+        }
+        return $this->sendWithStreams($method, $url, $headers, $payload);
+    }
+
+    /** @return array{0:string,1:int} */
+    private function sendWithStreams(string $method, string $url, array $headers, ?string $payload): array
+    {
+        $headers[] = 'Connection: close';
+        $context = stream_context_create([
+            'http' => [
+                'method' => $method,
+                'header' => implode("\r\n", $headers),
+                'content' => $payload ?? '',
+                'timeout' => 45,
+                'ignore_errors' => true, // read the body of 4xx/5xx answers too
+                'protocol_version' => 1.1,
+            ],
+            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+        ]);
+        $http_response_header = [];
+        $raw = @file_get_contents($url, false, $context);
+        if ($raw === false) {
+            throw new OmpayError('NETWORK', (string) (error_get_last()['message'] ?? 'Connection failed'), 0);
+        }
+        $status = 0;
+        foreach ($http_response_header as $line) {
+            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m)) {
+                $status = (int) $m[1]; // the last status line wins (after any redirects)
+            }
+        }
+        return [$raw, $status];
     }
 
     public function bankHosted(float $amount, string $currency, string $returnUrl, string $reference): array
