@@ -94,6 +94,32 @@ function fmt_card(?array $m): ?array
     return $m ? ['id' => $m['id'], 'brand' => $m['brand'], 'masked_pan' => $m['masked_pan'], 'is_default' => true, 'revoked_at' => null] : null;
 }
 
+/**
+ * Recent payment attempts, newest first. Clients see a plain reason for a
+ * failure; the gateway's own error codes are for admins only.
+ */
+function payment_history(string $companyId, bool $forAdmin): array
+{
+    $list = rows(
+        'SELECT p.id, p.flow, p.amount, p.currency, p.status, p.error_message, p.card_brand, p.card_masked, p.created_at,
+                i.id AS invoice_id, i.number
+           FROM payments p LEFT JOIN invoices i ON i.id = p.invoice_id
+          WHERE p.company_id = ? ORDER BY p.created_at DESC LIMIT 30',
+        [$companyId],
+    );
+    return array_map(function ($p) use ($forAdmin) {
+        $error = $p['status'] === 'failed' ? $p['error_message'] : null;
+        if ($error !== null && !$forAdmin && preg_match('/^[A-Z][A-Z0-9_]+:/', $error)) {
+            $error = 'The payment could not be started.';
+        }
+        return [
+            'id' => $p['id'], 'flow' => $p['flow'], 'amount' => (float) $p['amount'], 'currency' => $p['currency'],
+            'status' => $p['status'], 'error' => $error, 'card_brand' => $p['card_brand'], 'card_masked' => $p['card_masked'],
+            'created_at' => iso($p['created_at']), 'invoice_id' => $p['invoice_id'], 'invoice_number' => $p['number'],
+        ];
+    }, $list);
+}
+
 function default_card(string $companyId): ?array
 {
     return row('SELECT id, brand, masked_pan FROM payment_methods WHERE company_id = ? AND is_default = 1 AND revoked_at IS NULL', [$companyId]);
@@ -170,17 +196,6 @@ function delete_upload(?string $path): void
 
 /* ---------------------------------------------------------------- handlers */
 
-function send_mail(string $to, string $subject, string $text): bool
-{
-    $from = (string) cfg('email_from', 'VYRO <no-reply@' . (parse_url(app_url(), PHP_URL_HOST) ?: 'localhost') . '>');
-    if (getenv('VYRO_TEST')) {
-        file_put_contents(sys_get_temp_dir() . '/vyro-mail.log', json_encode(compact('to', 'subject', 'text')) . "\n", FILE_APPEND);
-        return true;
-    }
-    $headers = 'From: ' . preg_replace('/[\r\n]+/', ' ', $from) . "\r\nContent-Type: text/plain; charset=UTF-8\r\n";
-    return @mail($to, '=?UTF-8?B?' . base64_encode($subject) . '?=', $text, $headers);
-}
-
 function create_invite(string $companyId, string $email, ?string $by): string
 {
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -191,7 +206,29 @@ function create_invite(string $companyId, string $email, ?string $by): string
         'INSERT INTO invites (id, company_id, email, token_hash, expires_at, created_by, created_at) VALUES (?,?,?,?,?,?,?)',
         [uuid(), $companyId, strtolower($email), hash('sha256', $token), now(7 * 86400), $by, now()],
     );
-    return app_url() . '/register?invite=' . $token;
+    $url = app_url() . '/register?invite=' . $token;
+    $company = (string) val('SELECT COALESCE(store_name, name) FROM companies WHERE id = ?', [$companyId]);
+    $plan = row('SELECT * FROM plans WHERE company_id = ?', [$companyId]);
+    $rows = [['Company', $company]];
+    if ($plan) {
+        $rows[] = ['Plan', $plan['name']];
+        if ((float) $plan['setup_fee'] > 0) {
+            $rows[] = ['One-time setup fee', money_str($plan['setup_fee'], $plan['currency'])];
+        }
+        $rows[] = [$plan['billing_interval'] === 'annual' ? 'Yearly fee' : 'Monthly fee', money_str($plan['recurring_fee'], $plan['currency'])];
+    }
+    try {
+        send_mail(strtolower($email), 'Your VYRO account is ready to set up', [
+            'heading' => 'Welcome to VYRO',
+            'body' => "Your virtual try-on account for $company has been prepared.\n\nCreate your login to see your plan, add your products and switch VYRO on for your website.",
+            'rows' => $rows,
+            'button' => ['Create your account', $url],
+            'note' => 'This link is personal, works once and expires in 7 days.',
+        ]);
+    } catch (Throwable $e) {
+        error_log('invite email: ' . $e->getMessage()); // the admin still gets the link to pass on
+    }
+    return $url;
 }
 
 function valid_invite(string $token): array
@@ -283,9 +320,12 @@ function routes(): array
             }
             $u = row('SELECT id FROM users WHERE email = ?', [$email]);
             if ($u) {
-                send_mail($email, 'Reset your VYRO password',
-                    "Use this link to choose a new password. It works once and expires in 2 hours:\n\n" . password_reset_link($u['id'])
-                    . "\n\nIf you did not ask for this, you can ignore this email.");
+                send_mail($email, 'Reset your VYRO password', [
+                    'heading' => 'Reset your password',
+                    'body' => 'We received a request to choose a new password for your VYRO account.',
+                    'button' => ['Choose a new password', password_reset_link($u['id'])],
+                    'note' => 'This link works once and expires in 2 hours. If you did not ask for this, you can ignore this email; your password stays the same.',
+                ]);
             }
             return ['ok' => true]; // same answer whether or not the account exists
         },
@@ -404,6 +444,7 @@ function routes(): array
                 'sub' => fmt_sub(row('SELECT * FROM subscriptions WHERE company_id = ?', [$cid])),
                 'invoices' => invoices_with_items($cid),
                 'card' => fmt_card(default_card($cid)),
+                'payments' => payment_history($cid, false),
                 'widgetKey' => val('SELECT public_key FROM widget_keys WHERE company_id = ?', [$cid]),
                 'liveProducts' => (int) val('SELECT COUNT(*) FROM products WHERE company_id = ? AND active = 1', [$cid]),
             ];
@@ -447,6 +488,19 @@ function routes(): array
             if ($inv['status'] === 'paid') {
                 fail(409, 'This invoice is already paid');
             }
+            if (!empty(input()['saved'])) {
+                // Charge the saved card straight away, without leaving the dashboard.
+                if (!default_card($cid)) {
+                    fail(409, 'There is no saved card. Please pay with a card.');
+                }
+                if ($inv['status'] === 'processing') {
+                    fail(409, 'A payment for this invoice is still in progress. Please try again in a few minutes.');
+                }
+                if (!rate_ok('paysaved:' . $cid, 6, 3600)) {
+                    fail(429, 'Too many attempts. Please try again later or use a different card.');
+                }
+                return ['outcome' => charge_invoice_with_saved_card($gw, $inv['id'])];
+            }
             if ($inv['status'] === 'processing') {
                 // A checkout was started earlier (maybe abandoned). Ask OMPAY what
                 // became of it before allowing another one, so nobody pays twice.
@@ -489,6 +543,20 @@ function routes(): array
             } catch (OmpayError) {
                 fail(502, 'The card page could not be opened. Please try again.');
             }
+        },
+
+        'POST billing/remove-card' => function () {
+            $u = need_user();
+            $cid = company_scope($u, input()['company_id'] ?? null);
+            $removed = q(
+                'UPDATE payment_methods SET revoked_at = ?, is_default = 0 WHERE company_id = ? AND revoked_at IS NULL',
+                [now(), $cid],
+            )->rowCount();
+            if ($removed > 0) {
+                notify('admin', $cid, 'card_removed', 'Client removed their saved card',
+                    'Automatic renewals cannot be charged until they add a card again.');
+            }
+            return ['ok' => true];
         },
 
         'POST billing/confirm' => function () {
@@ -699,6 +767,7 @@ function routes(): array
                     'bill_on' => $e['bill_on'], 'invoice_id' => $e['invoice_id'],
                 ], rows('SELECT * FROM extra_charges WHERE company_id = ? ORDER BY created_at DESC', [$id])),
                 'card' => fmt_card(default_card($id)),
+                'payments' => payment_history($id, true),
                 'key' => $key ? ['public_key' => $key['public_key'], 'allowed_domains' => json_decode($key['allowed_domains'], true) ?: []] : null,
                 'registered' => (bool) val('SELECT 1 FROM users WHERE company_id = ? LIMIT 1', [$id]),
             ];

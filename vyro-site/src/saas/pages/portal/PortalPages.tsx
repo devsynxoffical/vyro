@@ -5,7 +5,7 @@ import { amount, api, day, isLive, logoUrl, money, type Company, type Invoice } 
 import { useCrumbs } from '../../shell';
 import {
   Avatar, Button, CodeBox, Empty, ErrorNote, Facts, Field, InvoiceStatus, Ledger, LiveStatus, Meter, Notice,
-  PageHead, Panel, SubStatus, useAction, useAsk, useToast,
+  PageHead, Panel, PaymentTable, SubStatus, useAction, useAsk, useToast,
 } from '../../ui';
 import { ProductsPanel } from '../../Products';
 import { ChangePassword } from '../admin/AdminSettings';
@@ -247,8 +247,8 @@ function InvoiceTable({ invoices }: { invoices: Invoice[] }) {
 
 export function PortalBilling() {
   useCrumbs([{ label: 'Billing' }]);
-  const { data, reload, updateCard, busy } = usePortal();
-  const { plan, sub, invoices, card } = data;
+  const { data, reload, updateCard, removeCard, busy } = usePortal();
+  const { plan, sub, invoices, card, payments } = data;
   const cur = plan?.currency ?? 'OMR';
   const ask = useAsk();
   const { busy: acting, run } = useAction();
@@ -325,11 +325,16 @@ export function PortalBilling() {
         <Panel
           title="Payment method"
           foot={
-            card ? (
+            <div className="vy-actions">
               <Button size="sm" busy={busy} onClick={updateCard} icon={<CreditCard />}>
-                Update card
+                {card ? 'Change card' : 'Add a card'}
               </Button>
-            ) : undefined
+              {card && (
+                <Button size="sm" variant="danger" busy={busy} onClick={removeCard}>
+                  Remove card
+                </Button>
+              )}
+            </div>
           }
         >
           {card ? (
@@ -342,14 +347,15 @@ export function PortalBilling() {
             />
           ) : (
             <Empty icon={<CreditCard />} title="No card saved yet">
-              Your card is saved when you make your first payment.
+              Your card is saved when you make your first payment, or you can add one now. Without a saved card, invoices
+              are not paid automatically.
             </Empty>
           )}
           <p className="vy-small vy-muted" style={{ marginTop: 16, display: 'flex', gap: 8 }}>
             <ShieldCheck size={16} style={{ flex: 'none', marginTop: 1 }} />
             <span>
               Cards are entered on OMPAY’s secure page. VYRO never sees or stores your card number.
-              {card && ' Updating your card makes a small check charge that is refunded straight away.'}
+              {' Adding or changing a card makes a small check charge that is refunded straight away.'}
             </span>
           </p>
         </Panel>
@@ -362,6 +368,16 @@ export function PortalBilling() {
           </Empty>
         ) : (
           <InvoiceTable invoices={invoices} />
+        )}
+      </Panel>
+
+      <Panel title="Payment history" description="Every payment attempt on your account." flush>
+        {payments.length === 0 ? (
+          <Empty icon={<CreditCard />} title="No payments yet">
+            Payments appear here as soon as the first one is made.
+          </Empty>
+        ) : (
+          <PaymentTable payments={payments} invoiceBase="/portal/invoices" />
         )}
       </Panel>
     </div>

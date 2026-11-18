@@ -140,6 +140,21 @@ export interface PaymentMethod {
   revoked_at: string | null;
 }
 
+/** One payment attempt, as shown in the payment history. */
+export interface Payment {
+  id: string;
+  flow: 'hosted' | 'token' | 'card_check' | 'offline';
+  amount: number;
+  currency: string;
+  status: 'processing' | 'successful' | 'failed' | 'refunded';
+  error: string | null;
+  card_brand: string | null;
+  card_masked: string | null;
+  created_at: string;
+  invoice_id: string | null;
+  invoice_number: string | null;
+}
+
 export interface Notice {
   id: string;
   company_id: string | null;

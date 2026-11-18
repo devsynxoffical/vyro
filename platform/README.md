@@ -100,6 +100,27 @@ for an hour are closed automatically. A closed checkout is still watched for
 three days: if the bank reports it was paid after all, the invoice is marked
 paid, or the money is refunded automatically if the invoice was already paid.
 
+## What clients can do on the Billing page
+
+- Pay an invoice: with the saved card in one click, or on OMPAY's page with a
+  different card if the saved one is declined.
+- Add, change or remove the saved card (adding or changing makes a small check
+  charge that is refunded straight away).
+- See every payment attempt with the card used and the reason for a failure.
+- Cancel the subscription at the end of the paid period, or resume it.
+
+Admins see the same payment history on the client page, with the gateway's
+own error text.
+
+## Emails
+
+Every email uses one branded layout (`lib/mail.php`): logo, dark theme and
+brand gradient, with a plain-text copy. Sent automatically: the registration
+invite, password reset, payment received, payment failed, upcoming renewal,
+service paused, subscription ended, duplicate payment refunded, and the admin
+alerts. Emails go out through the hosting account's own mail service, from
+the `EMAIL_FROM` address.
+
 ## What to ask OMPAY to enable
 
 On the merchant account (sandbox first, then production):

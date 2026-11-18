@@ -295,8 +295,9 @@ function billing_mark_invoice_paid(string $invoiceId): void
                     "Invoice {$inv['number']} was paid; VYRO is active again.");
             }
         }
-        notify('client', $inv['company_id'], 'payment_succeeded',
-            "Payment received – invoice {$inv['number']}", money_str($inv['total'], $inv['currency']));
+        notify('client', $inv['company_id'], 'payment_succeeded', "Payment received – invoice {$inv['number']}",
+            'We received ' . money_str($inv['total'], $inv['currency']) . " for invoice {$inv['number']}. Thank you. "
+            . 'You can view and print the invoice from your dashboard.');
     });
 }
 
@@ -599,10 +600,15 @@ function charge_invoice_with_saved_card(Gateway $gw, string $invoiceId): string
     if (!$payment) {
         return 'skipped';
     }
-    $token = val(
-        'SELECT ompay_token FROM payment_methods WHERE company_id = ? AND is_default = 1 AND revoked_at IS NULL',
+    $card = row(
+        'SELECT ompay_token, brand, masked_pan FROM payment_methods WHERE company_id = ? AND is_default = 1 AND revoked_at IS NULL',
         [$inv['company_id']],
     );
+    $token = $card['ompay_token'] ?? null;
+    if ($card) {
+        // So the payment history shows which card was charged.
+        q('UPDATE payments SET card_brand = ?, card_masked = ? WHERE id = ?', [$card['brand'], $card['masked_pan'], $payment]);
+    }
     if (!$token) {
         billing_record_result($payment, 'FAILED', null, null, null, null, 'No saved card on file.');
         return 'failed';

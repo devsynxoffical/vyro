@@ -8,6 +8,7 @@ require __DIR__ . '/auth.php';
 require __DIR__ . '/ompay.php';
 require __DIR__ . '/billing.php';
 require __DIR__ . '/migrate.php';
+require __DIR__ . '/mail.php';
 require __DIR__ . '/routes.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -49,8 +50,9 @@ function send_outbox(): int
             ), 'e');
         }
         $ok = true;
+        $view = notification_view($n);
         foreach (array_unique($to) as $address) {
-            $ok = send_mail($address, 'VYRO: ' . $n['title'], $n['title'] . ($n['body'] ? "\n\n" . $n['body'] : '') . "\n\n" . app_url() . '/login') && $ok;
+            $ok = send_mail($address, 'VYRO: ' . $n['title'], $view) && $ok;
         }
         if ($ok) {
             q('UPDATE notifications SET emailed_at = ? WHERE id = ?', [now(), $n['id']]);

@@ -3,12 +3,12 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { CircleAlert, ReceiptText, Trash2 } from 'lucide-react';
 import {
   amount, api, day, isLive, logoUrl, money,
-  type Company, type ExtraCharge, type Invoice, type PaymentMethod, type Plan, type Subscription,
+  type Company, type ExtraCharge, type Invoice, type Payment, type PaymentMethod, type Plan, type Subscription,
 } from '../../api';
 import { ProductsPanel } from '../../Products';
 import { useCrumbs } from '../../shell';
 import {
-  Affix, Avatar, Button, CodeBox, Empty, ErrorNote, Facts, Field, InvoiceStatus, Ledger, LiveStatus, Notice, Panel,
+  Affix, Avatar, Button, CodeBox, Empty, ErrorNote, Facts, Field, InvoiceStatus, Ledger, LiveStatus, Notice, Panel, PaymentTable,
   Segmented, SkeletonRows, SubStatus, Tabs, useAction, useAsk,
 } from '../../ui';
 
@@ -19,6 +19,7 @@ interface Data {
   invoices: Invoice[];
   extras: ExtraCharge[];
   card: PaymentMethod | null;
+  payments: Payment[];
   key: { public_key: string; allowed_domains: string[] } | null;
   registered: boolean;
 }
@@ -268,6 +269,13 @@ export function AdminClient() {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </Panel>
+            <Panel title="Payment history" description="Every attempt, including failures and the reason." flush>
+              {data.payments.length === 0 ? (
+                <Empty icon={<ReceiptText />} title="No payments yet" />
+              ) : (
+                <PaymentTable payments={data.payments} invoiceBase="/admin/invoices" />
               )}
             </Panel>
           </>

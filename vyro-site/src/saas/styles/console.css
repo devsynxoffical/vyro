@@ -1573,6 +1573,7 @@
 .vy-dialog {
   border: 0;
   padding: 0;
+  margin: auto; /* centred: the page reset removes the browser's own centring */
   background: var(--surface);
   color: var(--ink);
   border-radius: var(--r3);

@@ -356,6 +356,18 @@ eq($pa['sub']['live'], true, 'still live during grace');
 eq($pa['invoices'][0]['total'], 20, 'the extra was one-off: back to 20');
 ok(count($alice->get('notifications')['notifications']) > 0, 'client notified');
 ok(count(array_filter($admin->get('admin/overview')['failed'], fn ($i) => $i['company_id'] === $a['company_id'])) === 1, 'admin sees the failed payment');
+// the client tries the saved card from the dashboard; it is still declined
+$r = $alice->post('billing/pay', ['invoice_id' => $pa['invoices'][0]['id'], 'saved' => true]);
+eq($r['outcome'] ?? null, 'failed', 'paying with the saved card reports the decline');
+$bob->post('billing/pay', ['invoice_id' => $pa['invoices'][0]['id'], 'saved' => true]);
+eq($bob->status, 404, 'another client cannot charge this invoice');
+$hist = $alice->get('portal')['payments'];
+ok(count($hist) >= 3, 'payment history lists every attempt');
+$declined = array_values(array_filter($hist, fn ($p) => $p['status'] === 'failed' && $p['flow'] === 'token'));
+ok(count($declined) >= 2, 'both the automatic and the manual attempt are listed');
+eq([$declined[0]['card_masked'], $declined[0]['error']], ['464156******3343', 'Insufficient funds'], 'with the card that was tried and why it failed');
+ok(!str_contains($alice->raw, 'tok_alpha_secret'), 'history never shows the card token');
+ok(count($admin->get('admin/client?id=' . $a['company_id'])['payments']) === count($hist), 'admins see the same history');
 q('UPDATE subscriptions SET grace_until = ? WHERE company_id = ?', [now(-60), $a['company_id']]);
 eq($cron->post('cron/billing-run')['suspended'], 1, 'suspended after the grace period');
 eq((new Browser($base, ['Origin: https://alpha.test']))->get("widget-status?key=$key")['active'], false, 'widget off when suspended');
@@ -368,6 +380,11 @@ eq($alice->get('portal')['sub']['live'], true, 'keeps running until the period e
 eq($alice->post('billing/resume')['status'], 'active', 'client resumes');
 $bob->post('billing/cancel', ['company_id' => $a['company_id']]);
 eq($alice->get('portal')['sub']['status'], 'active', 'another client cannot cancel it');
+
+$alice->post('billing/remove-card');
+eq($alice->get('portal')['card'], null, 'the client can remove their saved card');
+$r = $alice->post('billing/update-card');
+ok(str_starts_with($r['redirect_url'] ?? '', 'http://ompay.test/pay/'), 'and add a new one on OMPAY’s page');
 
 /* ----------------------------------------------------- profile and logo */
 $alice->post('portal/company', ['name' => 'Alpha Jewels LLC', 'contact_email' => 'not-an-email']);
@@ -428,5 +445,15 @@ foreach (['api/config.php', 'api/lib/core.php'] as $f) {
 $anon->get('nope');
 eq($anon->status, 404, 'unknown route');
 ok(!str_contains($anon->raw, 'SQL') && !str_contains($anon->raw, '.php'), 'errors reveal no internals');
+
+/* ------------------------------------------------------------- emails, card */
+$mail = array_map(fn ($l) => json_decode($l, true), array_filter(explode("\n", (string) file_get_contents(sys_get_temp_dir() . '/vyro-mail.log'))));
+$invite = array_values(array_filter($mail, fn ($m) => str_contains($m['subject'], 'ready to set up')));
+ok(count($invite) >= 1 && str_contains($invite[0]['html'], '/register?invite='), 'the client is emailed their registration link');
+foreach ($mail as $m) {
+    ok(str_contains($m['html'], '/brand/email-logo.png') && str_contains($m['html'], '#8b5cf6'), 'every email carries the logo and brand colours');
+    ok(trim($m['text']) !== '' && !str_contains($m['text'], '<'), 'and a plain-text copy');
+}
+ok(count(array_filter($mail, fn ($m) => str_contains($m['html'], '/portal/billing') && str_contains($m['subject'], 'Payment failed'))) >= 1, 'a failed payment email links to billing');
 
 echo "ALL HTTP TESTS PASSED ($checks checks)\n";

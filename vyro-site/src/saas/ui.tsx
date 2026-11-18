@@ -15,7 +15,8 @@ import {
   type ReactNode,
 } from 'react';
 import { ArrowDown, ArrowUp, Check, CircleAlert, Copy, X } from 'lucide-react';
-import { STATUS_LABEL, type Invoice, type SubscriptionStatus } from './api';
+import { Link } from 'react-router-dom';
+import { STATUS_LABEL, day, money, type Invoice, type Payment, type SubscriptionStatus } from './api';
 
 type Tone = 'ok' | 'warn' | 'bad' | 'idle';
 
@@ -236,6 +237,72 @@ export function InvoiceStatus({ status }: { status: Invoice['status'] }) {
   const tone: Tone = ({ paid: 'ok', open: 'warn', processing: 'warn', failed: 'bad', void: 'idle' } as const)[status];
   const label = { paid: 'Paid', open: 'Due', processing: 'Processing', failed: 'Failed', void: 'Void' }[status];
   return <Status tone={tone}>{label}</Status>;
+}
+
+const PAYMENT_HOW: Record<Payment['flow'], string> = {
+  hosted: 'Paid by card',
+  token: 'Saved card',
+  card_check: 'Card check',
+  offline: 'Bank transfer / cash',
+};
+
+/** Every payment attempt: when, for which invoice, how, and what happened. */
+export function PaymentTable({ payments, invoiceBase }: { payments: Payment[]; invoiceBase: string }) {
+  const tone = { successful: 'ok', processing: 'warn', failed: 'bad', refunded: 'idle' } as const;
+  const label = { successful: 'Paid', processing: 'Processing', failed: 'Not paid', refunded: 'Refunded' };
+  return (
+    <div className="vy-table-wrap">
+      <table className="vy-table vy-table--stack">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>For</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th className="is-num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {payments.map((p) => (
+            <tr key={p.id}>
+              <td className="is-primary">{day(p.created_at)}</td>
+              <td data-label="For">
+                {p.invoice_id && p.invoice_number ? (
+                  <Link className="vy-rowlink vy-mono" to={`${invoiceBase}/${p.invoice_id}`}>
+                    {p.invoice_number}
+                  </Link>
+                ) : p.flow === 'card_check' ? (
+                  'Card check (refunded)'
+                ) : (
+                  '–'
+                )}
+              </td>
+              <td data-label="Method">
+                {PAYMENT_HOW[p.flow] ?? p.flow}
+                {p.card_masked && (
+                  <small className="vy-muted vy-small vy-mono" style={{ display: 'block' }}>
+                    {p.card_brand ? `${p.card_brand} ` : ''}
+                    {p.card_masked}
+                  </small>
+                )}
+              </td>
+              <td className="is-aside">
+                <Status tone={tone[p.status] ?? 'idle'}>{label[p.status] ?? p.status}</Status>
+                {p.error && (
+                  <small className="vy-muted vy-small" style={{ display: 'block' }}>
+                    {p.error}
+                  </small>
+                )}
+              </td>
+              <td className="is-num" data-label="Amount">
+                {money(p.amount, p.currency)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 /** Whether VYRO is running on the client's website right now. */
