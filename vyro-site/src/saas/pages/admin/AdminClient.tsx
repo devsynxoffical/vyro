@@ -272,10 +272,10 @@ export function AdminClient() {
               )}
             </Panel>
             <Panel title="Payment history" description="Every attempt, including failures and the reason." flush>
-              {data.payments.length === 0 ? (
+              {d.payments.length === 0 ? (
                 <Empty icon={<ReceiptText />} title="No payments yet" />
               ) : (
-                <PaymentTable payments={data.payments} invoiceBase="/admin/invoices" />
+                <PaymentTable payments={d.payments} invoiceBase="/admin/invoices" />
               )}
             </Panel>
           </>
