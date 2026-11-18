@@ -193,4 +193,56 @@ $results = [charge_invoice_with_saved_card($gw, $inv), charge_invoice_with_saved
 eq(count(array_keys($results, 'successful')), 1, 'one winner');
 eq(count($gw->tokenCharges) - $n0, 1, 'one charge');
 
+// ---- the client cancels on OMPAY's page, then pays again
+reset_db();
+$gw = new FakeOmpay();
+$c = new_client('Walked Away', ['setup_fee' => 50, 'recurring_fee' => 10]);
+$inv = val('SELECT id FROM invoices WHERE company_id = ?', [$c]);
+$p1 = billing_claim_invoice($inv, 'hosted');
+start_hosted_payment($gw, $p1, 50.0, 'OMR');
+eq(settle_payment($gw, $p1), 'processing', 'OMPAY still shows the cancelled checkout as pending');
+eq(billing_claim_invoice($inv, 'hosted'), null, 'invoice is held by the first checkout');
+ok(billing_abandon_hosted($p1), 'the unfinished checkout is closed');
+eq(val('SELECT status FROM invoices WHERE id = ?', [$inv]), 'open', 'invoice can be paid again');
+eq((int) val('SELECT attempts FROM invoices WHERE id = ?', [$inv]), 0, 'a cancelled checkout is not a failed attempt');
+ok(in_array($p1, billing_payments_to_reconcile(), true), 'the closed checkout is still watched');
+$p2 = billing_claim_invoice($inv, 'hosted');
+start_hosted_payment($gw, $p2, 50.0, 'OMR');
+$gw->completeHosted($gw->byReference($p2), true, 'tok_second');
+eq(settle_payment($gw, $p2), 'successful', 'second checkout paid');
+eq(val('SELECT status FROM subscriptions WHERE company_id = ?', [$c]), 'active', 'service started');
+// ...and the first page was still open in another tab and gets paid too
+$gw->completeHosted($gw->byReference($p1), true, 'tok_first');
+settle_payment($gw, $p1);
+eq(val('SELECT status FROM payments WHERE id = ?', [$p1]), 'refunded', 'the duplicate payment is refunded');
+ok(in_array($gw->byReference($p1), $gw->reversed, true), 'the duplicate went back to the card');
+eq((int) val("SELECT COUNT(*) FROM payments WHERE company_id = ? AND status = 'successful'", [$c]), 1, 'money kept once');
+
+// the closed checkout turns out to have been paid, and nothing else paid the invoice
+$c = new_client('Slow Bank', ['setup_fee' => 50, 'recurring_fee' => 10]);
+$inv = val('SELECT id FROM invoices WHERE company_id = ?', [$c]);
+$p1 = billing_claim_invoice($inv, 'hosted');
+start_hosted_payment($gw, $p1, 50.0, 'OMR');
+q('UPDATE payments SET created_at = ? WHERE id = ?', [now(-2 * 3600), $p1]);
+eq(billing_expire_stale(), 1, 'a checkout left open for over an hour is closed');
+eq(val('SELECT status FROM invoices WHERE id = ?', [$inv]), 'open', 'its invoice is free again');
+$gw->completeHosted($gw->byReference($p1), true, 'tok_slow');
+run_billing($gw);
+eq(val('SELECT status FROM invoices WHERE id = ?', [$inv]), 'paid', 'a late confirmation still counts');
+eq(val('SELECT status FROM subscriptions WHERE company_id = ?', [$c]), 'active', 'and starts the service');
+eq((int) val("SELECT COUNT(*) FROM payment_methods WHERE company_id = ? AND is_default = 1", [$c]), 1, 'card saved for renewals');
+
+// OMPAY did not save a card: the admins are told why renewals will not charge
+$c = new_client('No Token', ['setup_fee' => 50, 'recurring_fee' => 10]);
+$inv = val('SELECT id FROM invoices WHERE company_id = ?', [$c]);
+$p1 = billing_claim_invoice($inv, 'hosted');
+start_hosted_payment($gw, $p1, 50.0, 'OMR');
+$gw->completeHosted($gw->byReference($p1), true, null);
+settle_payment($gw, $p1);
+eq((int) val("SELECT COUNT(*) FROM notifications WHERE company_id = ? AND kind = 'card_not_saved'", [$c]), 1, 'admins warned that no card was saved');
+
+// the site runs the billing job itself when the schedule is late, once
+ok(billing_run_if_overdue(), 'overdue: this request runs the job');
+ok(!billing_run_if_overdue(), 'a second request straight after does not');
+
 echo "ALL BILLING TESTS PASSED ({$GLOBALS['checks']} checks)\n";

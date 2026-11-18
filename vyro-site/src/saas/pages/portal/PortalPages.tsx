@@ -11,7 +11,8 @@ import { ProductsPanel } from '../../Products';
 import { ChangePassword } from '../admin/AdminSettings';
 import { usePortal } from './PortalLayout';
 
-const isDue = (i: Invoice) => i.status === 'open' || i.status === 'failed';
+// "processing" counts too: a checkout that was started and left can be started again.
+const isDue = (i: Invoice) => i.status === 'open' || i.status === 'failed' || i.status === 'processing';
 
 function invoiceFor(inv: Invoice): string {
   if (inv.kind === 'setup') return 'One-time setup fee';
@@ -510,7 +511,7 @@ export function BillingReturn() {
         // keep trying; the billing run also reconciles in the background
       }
       if (stop) return;
-      if (++tries < 10) setTimeout(() => void check(), 3000);
+      if (++tries < 6) setTimeout(() => void check(), 3000);
       else setState('processing');
     };
     void check();
@@ -527,7 +528,10 @@ export function BillingReturn() {
     checking: ['Confirming your payment', 'Checking the result with the bank. This takes a few seconds.'],
     successful: ['Payment received', 'Thank you. Your account is up to date.'],
     failed: ['The payment did not go through', 'No money was taken. You can try again from Billing.'],
-    processing: ['Still processing', 'The bank has not confirmed this payment yet. Your billing page updates as soon as it does.'],
+    processing: [
+      'No payment received yet',
+      'If you cancelled or closed the payment page, no money was taken and you can pay again from Billing. If you did pay, it will show there within a few minutes.',
+    ],
   }[state];
 
   return (

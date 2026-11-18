@@ -451,11 +451,20 @@ function routes(): array
                 // A checkout was started earlier (maybe abandoned). Ask OMPAY what
                 // became of it before allowing another one, so nobody pays twice.
                 $open = val("SELECT id FROM payments WHERE invoice_id = ? AND status = 'processing' ORDER BY created_at DESC LIMIT 1", [$inv['id']]);
-                $outcome = $open ? settle_payment($gw, $open) : 'processing';
+                // A checkout opened a moment ago is a double click, not a retry.
+                $fresh = $open && val('SELECT 1 FROM payments WHERE id = ? AND created_at > ?', [$open, now(-(int) cfg('checkout_restart_seconds', 10))]);
+                try {
+                    $outcome = $open ? settle_payment($gw, $open) : 'processing';
+                } catch (OmpayError) {
+                    fail(502, 'The bank could not be reached. Please try again in a moment.');
+                }
                 if ($outcome === 'successful') {
                     fail(409, 'This invoice is already paid');
                 }
-                if ($outcome !== 'failed') {
+                // Still unpaid at the bank. A checkout page the client left
+                // (cancelled, closed the tab) is closed so they can start again;
+                // an automatic card charge in flight has to finish first.
+                if ($outcome !== 'failed' && ($fresh || !($open && billing_abandon_hosted($open)))) {
                     fail(409, 'A payment for this invoice is still in progress. Please try again in a few minutes.');
                 }
             }

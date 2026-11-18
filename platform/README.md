@@ -82,12 +82,23 @@ log shows a one-time link (valid 24 hours) to choose your password. Sign in at
 
 ### 4. Billing schedule
 
-The "Billing run" workflow calls the billing job every hour once it is on the
-`main` branch. If you prefer the server to do it, add a cPanel cron job instead:
+The billing job runs from three places, and running it more than once is safe:
+
+- The "Billing run" workflow (GitHub often delays scheduled runs by hours).
+- The site itself: after any request, if the job has not run for 15 minutes.
+- Recommended for exact timing, a cPanel cron job every 15 minutes:
 
 ```bash
 curl -fsS -X POST -H "X-Cron-Secret: YOUR_CRON_SECRET" https://YOUR-DOMAIN/api/cron/billing-run
 ```
+
+## Unfinished and duplicate payments
+
+A client who cancels or closes OMPAY's page can press Pay again (after a few
+seconds); the old checkout is closed and a new one opens. Checkouts left open
+for an hour are closed automatically. A closed checkout is still watched for
+three days: if the bank reports it was paid after all, the invoice is marked
+paid, or the money is refunded automatically if the invoice was already paid.
 
 ## What to ask OMPAY to enable
 

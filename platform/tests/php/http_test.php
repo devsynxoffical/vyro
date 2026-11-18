@@ -23,6 +23,8 @@ file_put_contents($config, '<?php return ' . var_export([
     'ompay_base_url' => "http://127.0.0.1:$OMPAY_PORT",
     'ompay_api_key' => 'test-key',
     'ompay_api_secret' => 'test-secret',
+    'checkout_restart_seconds' => 1,
+    'auto_billing' => false, // the tests run the billing job themselves
     'cron_secret' => 'test-cron-secret',
     'upload_dir' => $uploads,
     'admin_emails' => 'boss@vyro.test',
@@ -165,7 +167,7 @@ $bad = new Browser($base, ['X-Cron-Secret: wrong']);
 $bad->post('cron/billing-run');
 eq($bad->status, 403, 'wrong cron secret refused');
 $r = $cron->post('cron/migrate');
-eq($r['applied'], ['001_init.sql'], 'schema applied through the API');
+eq($r['applied'], ['001_init.sql', '002_payment_recovery.sql'], 'schema applied through the API');
 eq($cron->post('cron/migrate')['applied'], [], 'migrate is repeatable');
 
 $r = $cron->post('setup/admin', ['email' => 'boss@vyro.test']);
@@ -252,7 +254,13 @@ ok(str_starts_with($r['redirect_url'] ?? '', 'http://ompay.test/pay/'), 'sent to
 $pay = $r['payment_id'];
 eq($alice->post('billing/confirm', ['payment_id' => $pay])['status'], 'processing', 'not paid until OMPAY confirms');
 $alice->post('billing/pay', ['invoice_id' => $aInvoice]);
-eq($alice->status, 409, 'no second checkout while one is in progress');
+eq($alice->status, 409, 'a double click does not open a second checkout');
+// She cancelled on OMPAY's page and clicks Pay again: a fresh page opens.
+sleep(2);
+$again = $alice->post('billing/pay', ['invoice_id' => $aInvoice]);
+eq($alice->status, 200, 'an unfinished checkout can be started again');
+ok(($again['payment_id'] ?? $pay) !== $pay, 'as a new payment');
+// ...but she finishes on the first page after all: that still counts, once.
 $bob->post('billing/confirm', ['payment_id' => $pay]);
 eq($bob->status, 404, 'another client cannot confirm this payment');
 ompay('/_test/complete', ['id' => 'tx1', 'ok' => true, 'token' => 'tok_alpha_secret']);

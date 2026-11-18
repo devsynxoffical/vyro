@@ -330,13 +330,17 @@ function billing_record_result(
         }
         // A final answer is already recorded. The only change allowed afterwards
         // is OMPAY confirming a payment it had closed as "outcome unconfirmed".
-        if ($pay['status'] !== 'processing' && !($pay['outcome_unconfirmed'] && $status === 'SUCCESSFUL')) {
+        $watched = $pay['outcome_unconfirmed'] || $pay['superseded'];
+        if ($pay['status'] !== 'processing' && !($pay['status'] === 'failed' && $watched && $status === 'SUCCESSFUL')) {
+            if ($pay['superseded'] && $status === 'FAILED') {
+                q('UPDATE payments SET superseded = 0 WHERE id = ?', [$paymentId]); // settled: stop watching
+            }
             return ['changed' => false];
         }
 
         if ($status === 'SUCCESSFUL') {
             q(
-                "UPDATE payments SET status = 'successful', error_message = NULL, outcome_unconfirmed = 0,
+                "UPDATE payments SET status = 'successful', error_message = NULL, outcome_unconfirmed = 0, superseded = 0,
                         card_brand = COALESCE(?, card_brand), card_masked = COALESCE(?, card_masked), updated_at = ?
                   WHERE id = ?",
                 [$brand, $masked, now(), $paymentId],
@@ -356,10 +360,19 @@ function billing_record_result(
                     );
                 }
             }
+            $duplicate = false;
             if ($pay['invoice_id'] !== null) {
-                billing_mark_invoice_paid($pay['invoice_id']);
+                // The invoice may already have been paid by another attempt (the
+                // client started a second checkout): this money must go back.
+                $duplicate = val('SELECT status FROM invoices WHERE id = ? FOR UPDATE', [$pay['invoice_id']]) === 'paid';
+                if (!$duplicate) {
+                    billing_mark_invoice_paid($pay['invoice_id']);
+                }
             }
-            return ['changed' => true, 'status' => 'successful', 'refund_card_check' => $pay['flow'] === 'card_check'];
+            return [
+                'changed' => true, 'status' => 'successful',
+                'refund_card_check' => $pay['flow'] === 'card_check', 'refund_duplicate' => $duplicate,
+            ];
         }
 
         // FAILED
@@ -494,34 +507,60 @@ function billing_payments_to_reconcile(): array
     return array_column(rows(
         "SELECT id FROM payments
           WHERE (status = 'processing' AND created_at < ?)
-             OR (status = 'failed' AND outcome_unconfirmed = 1 AND created_at > ?)",
-        [now(-120), now(-14 * 86400)],
+             OR (status = 'failed' AND outcome_unconfirmed = 1 AND created_at > ?)
+             OR (status = 'failed' AND superseded = 1 AND created_at > ?)",
+        [now(-120), now(-14 * 86400), now(-3 * 86400)],
     ), 'id');
 }
 
 /**
- * Payments that never reached OMPAY (no transaction id after 30 minutes). An
- * abandoned checkout frees its invoice to be paid again; an automatic charge
- * that never arrived counts as a failed attempt.
+ * Closes a checkout the client did not finish, so the invoice can be paid
+ * again. If OMPAY knows the transaction it stays watched: should the bank
+ * report later that it was paid after all, that is applied (or refunded if the
+ * invoice was paid another way in the meantime).
+ */
+function billing_abandon_hosted(string $paymentId): bool
+{
+    return tx(function () use ($paymentId) {
+        $pay = row('SELECT * FROM payments WHERE id = ? FOR UPDATE', [$paymentId]);
+        if (!$pay || $pay['status'] !== 'processing' || !in_array($pay['flow'], ['hosted', 'card_check'], true)) {
+            return false;
+        }
+        q(
+            "UPDATE payments SET status = 'failed', error_message = 'Payment was not completed.', superseded = ?, updated_at = ? WHERE id = ?",
+            [$pay['ompay_transaction_id'] === null ? 0 : 1, now(), $paymentId],
+        );
+        if ($pay['invoice_id'] !== null) {
+            // Not a declined card: it does not count as one of the automatic attempts.
+            q(
+                "UPDATE invoices SET status = 'open', attempts = GREATEST(attempts - 1, 0) WHERE id = ? AND status = 'processing'",
+                [$pay['invoice_id']],
+            );
+        }
+        return true;
+    });
+}
+
+/**
+ * Closes payments that are going nowhere: a checkout page left open for over
+ * an hour (or that never reached OMPAY) frees its invoice to be paid again; an
+ * automatic charge that never arrived counts as a failed attempt.
  */
 function billing_expire_stale(): int
 {
     $n = 0;
     $stale = rows(
-        "SELECT id, flow, invoice_id FROM payments
-          WHERE status = 'processing' AND ompay_transaction_id IS NULL AND created_at < ?",
-        [now(-1800)],
+        "SELECT id, flow FROM payments
+          WHERE status = 'processing'
+            AND ((ompay_transaction_id IS NULL AND created_at < ?)
+              OR (flow IN ('hosted', 'card_check') AND created_at < ?))",
+        [now(-1800), now(-3600)],
     );
     foreach ($stale as $p) {
         if ($p['flow'] === 'token') {
             billing_record_result($p['id'], 'FAILED', null, null, null, null, 'The payment could not be sent to the bank.');
         } else {
-            tx(function () use ($p) {
-                q("UPDATE payments SET status = 'failed', error_message = 'Payment was not completed.', updated_at = ? WHERE id = ? AND status = 'processing'", [now(), $p['id']]);
-                if ($p['invoice_id']) {
-                    q("UPDATE invoices SET status = 'open' WHERE id = ? AND status = 'processing'", [$p['invoice_id']]);
-                }
-            });
+            billing_abandon_hosted($p['id']);
         }
         $n++;
     }
@@ -638,20 +677,59 @@ function settle_payment(Gateway $gw, string $paymentId): string
         $inq['error_message'] ?? null,
         ($inq['outcome_unconfirmed'] ?? false) === true,
     );
-    // The small charge used to verify a new card is given straight back.
-    if ($result['changed'] && !empty($result['refund_card_check']) && !empty($inq['transaction_id'])) {
-        try {
-            $gw->reverse((string) $inq['transaction_id']);
-        } catch (OmpayError) {
-            try {
-                $gw->refund((string) $inq['transaction_id']);
-            } catch (OmpayError) {
-                notify('admin', $pay['company_id'], 'refund_needed', 'Card-check charge could not be refunded automatically',
-                    "Refund transaction {$inq['transaction_id']} (" . money_str($pay['amount'], $pay['currency']) . ') in the OMPAY portal.');
+    if ($result['changed'] && !empty($inq['transaction_id'])) {
+        if (!empty($result['refund_duplicate'])) {
+            // The invoice was already paid by another attempt: give this one back.
+            if (give_back($gw, $pay, (string) $inq['transaction_id'], 'Duplicate payment could not be refunded automatically')) {
+                q("UPDATE payments SET status = 'refunded', updated_at = ? WHERE id = ?", [now(), $paymentId]);
+                notify('client', $pay['company_id'], 'duplicate_refunded', 'A duplicate payment was refunded',
+                    money_str($pay['amount'], $pay['currency']) . ' was paid twice for the same invoice and has been returned to your card.');
             }
+            return 'failed';
+        }
+        if (!empty($result['refund_card_check'])) {
+            // The small charge used to verify a new card is given straight back.
+            give_back($gw, $pay, (string) $inq['transaction_id'], 'Card-check charge could not be refunded automatically');
         }
     }
+    // Automatic renewals need the card OMPAY saves on the first payment.
+    if ($result['changed'] && $status === 'SUCCESSFUL' && $pay['flow'] !== 'token'
+        && !val('SELECT 1 FROM payment_methods WHERE company_id = ? AND is_default = 1 AND revoked_at IS NULL', [$pay['company_id']])
+        && !val("SELECT 1 FROM notifications WHERE company_id = ? AND kind = 'card_not_saved' AND created_at > ?", [$pay['company_id'], now(-30 * 86400)])) {
+        notify('admin', $pay['company_id'], 'card_not_saved', 'Payment received, but OMPAY did not save the card',
+            'Automatic renewals cannot charge this client until a card is saved. Ask OMPAY to enable "Forced Saved Cards" and card tokenization on the merchant account.');
+    }
     return $status === 'SUCCESSFUL' ? 'successful' : ($status === 'FAILED' ? 'failed' : 'processing');
+}
+
+/** Returns a charge to the card (reverse, else refund); tells the admins if neither works. */
+function give_back(Gateway $gw, array $pay, string $transactionId, string $problem): bool
+{
+    foreach (['reverse', 'refund'] as $how) {
+        try {
+            $gw->$how($transactionId);
+            return true;
+        } catch (OmpayError) {
+            // try the next way
+        }
+    }
+    notify('admin', $pay['company_id'], 'refund_needed', $problem,
+        "Refund transaction $transactionId (" . money_str($pay['amount'], $pay['currency']) . ') in the OMPAY portal.');
+    return false;
+}
+
+/**
+ * Runs the billing job if the scheduler has not run it for a while. Called
+ * after ordinary requests, so billing keeps moving even when the external
+ * schedule is late. The claim is atomic: overlapping requests run it once.
+ */
+function billing_run_if_overdue(int $everySeconds = 900): bool
+{
+    $claimed = q(
+        'UPDATE app_settings SET last_billing_run_at = ? WHERE id = 1 AND (last_billing_run_at IS NULL OR last_billing_run_at < ?)',
+        [now(), now(-$everySeconds)],
+    )->rowCount();
+    return $claimed === 1;
 }
 
 /** The scheduled billing run. Each step is independent; one failure never blocks the rest. */

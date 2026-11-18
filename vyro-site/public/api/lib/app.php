@@ -60,6 +60,39 @@ function send_outbox(): int
     return $sent;
 }
 
+/**
+ * Safety net for the schedule: after an ordinary request has been answered,
+ * run the billing job if it has not run in the last 15 minutes.
+ */
+register_shutdown_function(function () {
+    try {
+        if (!cfg('auto_billing', true) || trim((string) cfg('ompay_api_key', '')) === ''
+            || str_contains((string) ($_SERVER['REQUEST_URI'] ?? ''), '/cron/')
+            || str_contains((string) ($_SERVER['REQUEST_URI'] ?? ''), '/setup/')
+            || !billing_run_if_overdue()) {
+            return;
+        }
+        // Let the visitor go first; the work continues after the response.
+        ignore_user_abort(true);
+        if (function_exists('litespeed_finish_request')) {
+            litespeed_finish_request();
+        } elseif (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        }
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+        @set_time_limit(240);
+        $summary = run_billing(gateway());
+        send_outbox();
+        if ($summary['errors']) {
+            error_log('billing-run (auto): ' . implode(' | ', $summary['errors']));
+        }
+    } catch (Throwable $e) {
+        error_log('billing-run (auto): ' . $e->getMessage());
+    }
+});
+
 try {
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $uri = (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
@@ -102,6 +135,7 @@ try {
     }
     if ($path === 'cron/billing-run') {
         need_cron_secret();
+        q('UPDATE app_settings SET last_billing_run_at = ? WHERE id = 1', [now()]);
         $summary = run_billing(gateway());
         try {
             $summary['emails'] = send_outbox();
